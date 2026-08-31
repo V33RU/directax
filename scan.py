@@ -2,17 +2,30 @@
 """DIRECTAX. Wi-Fi Direct (P2P) offensive research toolkit.
 
 Subcommands:
-  discover     Passive P2P device discovery (no injection)
-  sniff        Full P2P + WSC + EAPOL capture (no injection)
-  deauth       Deauth flood a P2P GO's clients
-  beacon-flood Inject synthetic P2P GO beacons
-  pd-flood     Provision Discovery flood a target device
-  pbc-race     WPS PBC race attack against a GO in walk-time
-  wps-pin      WPS External Registrar PIN brute
-  pixie        WPS Pixie-Dust
-  handshake    Capture EAPOL 4-way from P2P group
-  rogue-go     Stand up a rogue Group Owner (evil-twin)
-  audit        Discover targets, then run every safe active check with confirmation
+  discover      Passive P2P device discovery (no injection)
+  sniff         Full P2P + WSC + EAPOL capture (no injection)
+  deauth        Deauth flood a P2P GO's clients (PMF-gated)
+  beacon-flood  Inject synthetic P2P GO beacons
+  pd-flood      Provision Discovery flood a target device
+  pbc-race      WPS PBC race attack against a GO in walk-time
+  wps-pin       WPS External Registrar PIN brute (reaver)
+  pixie         WPS Pixie-Dust (reaver -K path)
+  pixie-pcap    WPS Pixie-Dust from an existing pcap (native)
+  handshake     Capture EAPOL 4-way from P2P group
+  rogue-go      Stand up a rogue Group Owner (evil-twin)
+  invitation    P2P Invitation Request rejoin against persistent group
+  noa-starve    Notice-of-Absence starvation of P2P clients
+  goneg-hijack  Race a GO-Neg-Resp with intent=15 to hijack Group Formation
+  pmkid         PMKID capture for offline PSK
+  cross-conn    Probe cross-connection pivot from inside a joined P2P group
+  hashcat       Convert pcap and run hashcat 22000
+  driver-probe  Print driver capability report for an interface
+  karma         KARMA-style probe-response responder alongside rogue-GO
+  nan-scan      Passive Wi-Fi Aware / NAN scanner
+  miracast-fuzz Mutation fuzzer against a Miracast RTSP sink
+  miracast-sink Trivial Miracast responder to observe source M4/M5
+  p2p-fuzz      Protocol-aware P2P Public Action frame fuzzer
+  audit         Discover targets and run every safe active check with confirmation
   novelty-check Run only the known-issue gate on an existing findings JSON
 """
 from __future__ import annotations
@@ -36,7 +49,16 @@ from wifidirect_pentest.scanners import Discovery, inspect_wps  # noqa: E402
 from wifidirect_pentest.sniffers import P2PSniffer, EAPOLSniffer  # noqa: E402
 from wifidirect_pentest.attacks import (BeaconFlood, DeauthFlood,  # noqa: E402
                                         HandshakeCapture, PBCRace, PixieDust,
-                                        ProvisionFlood, RogueGO, WPSPinBrute)
+                                        ProvisionFlood, RogueGO, WPSPinBrute,
+                                        InvitationReplay, NoAStarve,
+                                        GoNegHijack, PMKIDCapture,
+                                        probe_cross_connection,
+                                        confirmed_pivot, hashcat_crack,
+                                        pixie_from_pcap)
+from wifidirect_pentest.core.driver_probe import probe as probe_driver  # noqa: E402
+from wifidirect_pentest.attacks.karma_responder import KarmaResponder  # noqa: E402
+from wifidirect_pentest.fuzzers import MiracastFuzzer, MiracastSink, P2PFrameFuzzer  # noqa: E402
+from wifidirect_pentest.scanners.nan import NANScanner  # noqa: E402
 from wifidirect_pentest.reporting import (NoveltyGate, print_human_summary,  # noqa: E402
                                           write_run)
 
@@ -218,16 +240,22 @@ def cmd_rogue_go(args) -> int:
         raise SystemExit("--authorized required for active attack")
     r = RogueGO(args.iface, args.ssid, args.bssid, args.channel,
                 device_name=args.device_name, psk=args.psk,
+                sae_transition=args.sae_transition, karma=args.karma,
                 evidence_dir=args.evidence_dir)
     logs = r.start()
     try:
         time.sleep(args.duration)
     finally:
         collected = r.stop_and_collect()
-    confirmed = r.confirm_from_logs(collected)
-    finding = fb.build_rogue_go_finding(args.ssid, args.bssid, collected, confirmed)
+    signals = r.confirm_from_logs(collected)
+    # A CONFIRMED rogue-GO finding needs at least the association proof.
+    # Credential theft is the stronger claim and only fires when both
+    # DHCPACK and captive CREDS lines are present.
+    ok = signals["confirmed_evil_twin"]
+    finding = fb.build_rogue_go_finding(args.ssid, args.bssid, collected, ok)
     _emit([finding] if finding else [], args)
-    return 0 if confirmed else 1
+    print(json.dumps(signals, indent=2))
+    return 0 if ok else 1
 
 
 def cmd_audit(args) -> int:
@@ -241,9 +269,9 @@ def cmd_audit(args) -> int:
         devs = disc.run(duration=args.discovery_time)
         targets = [d for d in devs.values() if d.role == "GO"]
         if args.target_mac:
-            targets = [d for d in devs.values()
-                       if args.target_mac.lower() in
-                       {d.device_addr, *d.interface_addrs, *d.bssids}]
+            wanted = args.target_mac.lower()
+            targets = [d for d in targets
+                       if wanted in {d.device_addr, *d.interface_addrs, *d.bssids}]
         log.info("audit: %d GO target(s)", len(targets))
         for d in targets:
             bssid = next(iter(d.bssids), d.device_addr)
@@ -274,6 +302,180 @@ def cmd_audit(args) -> int:
     findings = NoveltyGate().apply(findings)
     _emit(findings, args)
     return 0 if findings else 1
+
+
+def cmd_invitation(args) -> int:
+    _require_root()
+    if not args.authorized:
+        raise SystemExit("--authorized required for active attack")
+    ifc, mon = _open_monitor(args.iface)
+    try:
+        inv = InvitationReplay(mon, args.target, args.group_bssid,
+                               args.group_ssid, args.channel,
+                               evidence_dir=args.evidence_dir)
+        r = inv.run()
+    finally:
+        ifc.restore()
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("confirmed") else 1
+
+
+def cmd_noa(args) -> int:
+    _require_root()
+    if not args.authorized:
+        raise SystemExit("--authorized required for active attack")
+    ifc, mon = _open_monitor(args.iface)
+    try:
+        n = NoAStarve(mon, args.go, args.ssid, args.channel)
+        r = n.run(duration=args.duration, tbtt_ms=args.tbtt_ms)
+    finally:
+        ifc.restore()
+    print(json.dumps(r, indent=2))
+    return 0
+
+
+def cmd_goneg(args) -> int:
+    _require_root()
+    if not args.authorized:
+        raise SystemExit("--authorized required for active attack")
+    ifc, mon = _open_monitor(args.iface)
+    try:
+        g = GoNegHijack(mon, args.our_mac, op_channel=args.channel)
+        r = g.wait_and_hijack(timeout=args.timeout)
+    finally:
+        ifc.restore()
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("hijacked") else 1
+
+
+def cmd_pmkid(args) -> int:
+    _require_root()
+    if not args.authorized:
+        raise SystemExit("--authorized required for active attack")
+    ifc, mon = _open_monitor(args.iface)
+    try:
+        pk = PMKIDCapture(mon, args.go, args.channel,
+                          client_mac=args.client_mac,
+                          evidence_dir=args.evidence_dir)
+        r = pk.run(attempts=args.attempts)
+    finally:
+        ifc.restore()
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("confirmed") else 1
+
+
+def cmd_cross_conn(args) -> int:
+    r = probe_cross_connection(args.iface, pivot_target=args.pivot_target,
+                               manageability_bit=args.manageability)
+    out = {
+        "iface": r.p2p_iface,
+        "gateway": r.gateway,
+        "p2p_subnet": r.p2p_subnet,
+        "manageability_forbids": r.manageability_forbids,
+        "reachable": {f"{h}:{p}": v for (h, p), v in r.reachable.items()},
+        "confirmed_pivot": confirmed_pivot(r),
+    }
+    print(json.dumps(out, indent=2))
+    return 0 if out["confirmed_pivot"] else 1
+
+
+def cmd_driver_probe(args) -> int:
+    caps = probe_driver(args.iface)
+    out = {
+        "iface": caps.iface, "phy": caps.phy, "driver": caps.driver,
+        "supports_monitor": caps.supports_monitor,
+        "supports_active_monitor": caps.supports_active_monitor,
+        "supports_p2p_go": caps.supports_p2p_go,
+        "supports_p2p_client": caps.supports_p2p_client,
+        "supports_p2p_device": caps.supports_p2p_device,
+        "supports_5ghz": caps.supports_5ghz,
+        "supports_6ghz": caps.supports_6ghz,
+        "supported_ciphers": caps.supported_ciphers,
+        "warnings": caps.warnings,
+    }
+    print(json.dumps(out, indent=2))
+    return 0 if caps.supports_monitor and not caps.warnings else 1
+
+
+def cmd_hashcat(args) -> int:
+    r = hashcat_crack(args.pcap, args.wordlist, rules=args.rules,
+                      runtime_seconds=args.runtime,
+                      out_dir=args.evidence_dir)
+    print(json.dumps({
+        "confirmed": r.confirmed, "psk": r.psk, "ssid": r.ssid,
+        "hc22000": r.hc22000_path, "hash_line": r.hash_line,
+    }, indent=2))
+    return 0 if r.confirmed else 1
+
+
+def cmd_pixie_pcap(args) -> int:
+    r = pixie_from_pcap(args.pcap, extra_flags=args.flags)
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("confirmed") else 1
+
+
+def cmd_karma(args) -> int:
+    _require_root()
+    if not args.authorized:
+        raise SystemExit("--authorized required for active attack")
+    ifc, mon = _open_monitor(args.iface)
+    try:
+        k = KarmaResponder(mon, args.our_bssid, args.channel,
+                           ssid_denylist=args.deny)
+        r = k.run(duration=args.duration)
+    finally:
+        ifc.restore()
+    print(json.dumps(r, indent=2))
+    return 0
+
+
+def cmd_nan(args) -> int:
+    _require_root()
+    ifc, mon = _open_monitor(args.iface)
+    try:
+        n = NANScanner(mon)
+        r = n.run(duration=args.duration)
+    finally:
+        ifc.restore()
+    print(json.dumps(r, indent=2))
+    return 0
+
+
+def cmd_miracast_fuzz(args) -> int:
+    if not args.authorized:
+        raise SystemExit("--authorized required for active fuzzing")
+    f = MiracastFuzzer(args.sink, port=args.port,
+                       evidence_dir=args.evidence_dir)
+    r = f.run(n=args.cases, seed=args.seed)
+    print(json.dumps(r, indent=2))
+    return 0
+
+
+def cmd_miracast_sink(args) -> int:
+    s = MiracastSink(host=args.host, port=args.port, log_path=args.log_path)
+    s.start()
+    try:
+        time.sleep(args.duration)
+    finally:
+        s.stop()
+    print(json.dumps({"log_path": args.log_path,
+                      "duration_s": args.duration}, indent=2))
+    return 0
+
+
+def cmd_p2p_fuzz(args) -> int:
+    _require_root()
+    if not args.authorized:
+        raise SystemExit("--authorized required for active fuzzing")
+    ifc, mon = _open_monitor(args.iface)
+    try:
+        f = P2PFrameFuzzer(mon, args.target, subtypes=tuple(args.subtypes))
+        r = f.run(cases_per_subtype=args.cases, seed=args.seed,
+                  evidence_dir=args.evidence_dir)
+    finally:
+        ifc.restore()
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("crash_suspects") == 0 else 2
 
 
 def cmd_novelty_check(args) -> int:
@@ -381,8 +583,12 @@ def build_parser() -> argparse.ArgumentParser:
     rg.add_argument("--ssid", required=True)
     rg.add_argument("--bssid", required=True)
     rg.add_argument("--channel", type=int, required=True)
-    rg.add_argument("--device-name", default="wfdx-clone")
-    rg.add_argument("--psk", default="wfdx-lab-only-1234")
+    rg.add_argument("--device-name", default="directax-clone")
+    rg.add_argument("--psk", default="directax-lab-only-1234")
+    rg.add_argument("--sae-transition", action="store_true",
+                    help="hostapd config supports WPA2-PSK + WPA3-SAE")
+    rg.add_argument("--karma", action="store_true",
+                    help="reserved: run KARMA probe responder alongside")
     rg.add_argument("--duration", type=float, default=120.0)
     rg.add_argument("--authorized", action="store_true")
     rg.set_defaults(func=cmd_rogue_go)
@@ -397,6 +603,109 @@ def build_parser() -> argparse.ArgumentParser:
     nc = sub.add_parser("novelty-check")
     nc.add_argument("--input", required=True)
     nc.set_defaults(func=cmd_novelty_check)
+
+    inv = sub.add_parser("invitation")
+    inv.add_argument("-i", "--iface", required=True)
+    inv.add_argument("--target", required=True, help="target P2P Device Address")
+    inv.add_argument("--group-bssid", required=True)
+    inv.add_argument("--group-ssid", required=True)
+    inv.add_argument("--channel", type=int, required=True)
+    inv.add_argument("--authorized", action="store_true")
+    inv.set_defaults(func=cmd_invitation)
+
+    na = sub.add_parser("noa-starve")
+    na.add_argument("-i", "--iface", required=True)
+    na.add_argument("--go", required=True, help="GO BSSID to impersonate")
+    na.add_argument("--ssid", required=True)
+    na.add_argument("--channel", type=int, required=True)
+    na.add_argument("--duration", type=float, default=30.0)
+    na.add_argument("--tbtt-ms", type=int, default=100)
+    na.add_argument("--authorized", action="store_true")
+    na.set_defaults(func=cmd_noa)
+
+    gn = sub.add_parser("goneg-hijack")
+    gn.add_argument("-i", "--iface", required=True)
+    gn.add_argument("--our-mac", required=True)
+    gn.add_argument("--channel", type=int, default=6)
+    gn.add_argument("--timeout", type=float, default=30.0)
+    gn.add_argument("--authorized", action="store_true")
+    gn.set_defaults(func=cmd_goneg)
+
+    pm = sub.add_parser("pmkid")
+    pm.add_argument("-i", "--iface", required=True)
+    pm.add_argument("--go", required=True)
+    pm.add_argument("--channel", type=int, required=True)
+    pm.add_argument("--client-mac", default="02:11:22:33:44:66")
+    pm.add_argument("--attempts", type=int, default=5)
+    pm.add_argument("--authorized", action="store_true")
+    pm.set_defaults(func=cmd_pmkid)
+
+    cc = sub.add_parser("cross-conn")
+    cc.add_argument("-i", "--iface", required=True,
+                    help="joined P2P client iface (e.g. p2p-wlan0-0)")
+    cc.add_argument("--pivot-target", default=None,
+                    help="IP address to probe; default is P2P subnet gateway")
+    cc.add_argument("--manageability", type=lambda s: int(s, 0), default=None,
+                    help="P2P Manageability attr value from discovery (e.g. 0x00)")
+    cc.set_defaults(func=cmd_cross_conn)
+
+    dp = sub.add_parser("driver-probe")
+    dp.add_argument("-i", "--iface", required=True)
+    dp.set_defaults(func=cmd_driver_probe)
+
+    hc = sub.add_parser("hashcat")
+    hc.add_argument("--pcap", required=True)
+    hc.add_argument("--wordlist", required=True)
+    hc.add_argument("--rules", default=None)
+    hc.add_argument("--runtime", type=int, default=300)
+    hc.set_defaults(func=cmd_hashcat)
+
+    pxp = sub.add_parser("pixie-pcap")
+    pxp.add_argument("--pcap", required=True,
+                     help="pcap containing WPS M1/M2/M3")
+    pxp.add_argument("--flags", nargs="*", default=None,
+                     help="extra flags forwarded to pixiewps")
+    pxp.set_defaults(func=cmd_pixie_pcap)
+
+    kr = sub.add_parser("karma")
+    kr.add_argument("-i", "--iface", required=True)
+    kr.add_argument("--our-bssid", required=True,
+                    help="BSSID to advertise in probe responses")
+    kr.add_argument("--channel", type=int, required=True)
+    kr.add_argument("--duration", type=float, default=300.0)
+    kr.add_argument("--deny", nargs="*", default=[],
+                    help="SSIDs to not respond for")
+    kr.add_argument("--authorized", action="store_true")
+    kr.set_defaults(func=cmd_karma)
+
+    nan = sub.add_parser("nan-scan")
+    nan.add_argument("-i", "--iface", required=True)
+    nan.add_argument("--duration", type=float, default=60.0)
+    nan.set_defaults(func=cmd_nan)
+
+    mf = sub.add_parser("miracast-fuzz")
+    mf.add_argument("--sink", required=True, help="IP address of Miracast sink")
+    mf.add_argument("--port", type=int, default=7236)
+    mf.add_argument("--cases", type=int, default=64)
+    mf.add_argument("--seed", type=int, default=None)
+    mf.add_argument("--authorized", action="store_true")
+    mf.set_defaults(func=cmd_miracast_fuzz)
+
+    ms = sub.add_parser("miracast-sink")
+    ms.add_argument("--host", default="0.0.0.0")
+    ms.add_argument("--port", type=int, default=7236)
+    ms.add_argument("--duration", type=float, default=300.0)
+    ms.add_argument("--log-path", default="evidence/miracast_sink.log")
+    ms.set_defaults(func=cmd_miracast_sink)
+
+    pf = sub.add_parser("p2p-fuzz")
+    pf.add_argument("-i", "--iface", required=True)
+    pf.add_argument("--target", required=True)
+    pf.add_argument("--cases", type=int, default=200)
+    pf.add_argument("--seed", type=int, default=0xC0FFEE)
+    pf.add_argument("--subtypes", nargs="*", type=int, default=[7, 0, 3])
+    pf.add_argument("--authorized", action="store_true")
+    pf.set_defaults(func=cmd_p2p_fuzz)
 
     return p
 

@@ -18,22 +18,28 @@ recorded observable effect are emitted at `confidence: confirmed`.
 
 ## Attack surface covered
 
-| # | Capability                                | Module                             | Confirmation artifact                       |
-|---|-------------------------------------------|------------------------------------|---------------------------------------------|
-| 1 | Passive P2P Device / GO / Client discovery| `scanners/discovery.py`            | device table, pcap                          |
-| 2 | P2P + WSC IE full attribute parse         | `core/p2p_ie.py`                   | structured device record                    |
-| 3 | P2P Service Discovery (Bonjour/UPnP/WSD)  | `scanners/service.py`              | SD-Response TLV dump                        |
-| 4 | Full P2P frame sniff (Action + IE)        | `sniffers/p2p_sniffer.py`          | pcap + subtype counts                       |
-| 5 | EAPOL / WSC M1..M8 sniff                  | `sniffers/eapol_sniffer.py`        | pcap + msg-type histogram                   |
-| 6 | Deauth against P2P GO (no PMF)            | `attacks/deauth.py`                | pcap containing reconnect frames            |
-| 7 | 4-way handshake capture                   | `attacks/handshake_capture.py`     | pcap with >=2 distinct EAPOL key-info bytes |
-| 8 | WPS Pixie-Dust (reaver -K + pixiewps)     | `attacks/pixiedust.py`             | recovered PIN + PSK                         |
-| 9 | WPS External Registrar PIN brute (reaver) | `attacks/pin_bruteforce.py`        | recovered PIN + PSK                         |
-| 10| WPS PBC session-overlap race              | `attacks/pbc_race.py`              | credentials returned by wpa_supplicant      |
-| 11| Rogue Group Owner (evil-twin)             | `attacks/rogue_go.py`              | dnsmasq DHCPACK, captive HTTP log           |
-| 12| Beacon flood with synthetic P2P GOs       | `attacks/beacon_flood.py`          | scanner enumerates fake devices             |
-| 13| Provision Discovery flood                 | `attacks/provision_flood.py`       | target stops answering PD-Req               |
-| 14| P2P Device/Interface Address clone        | `attacks/mac_spoof.py`             | frames accepted as target                   |
+25 subcommands across discovery, sniffing, active attacks, and fuzzing.
+
+Discovery and inspection: passive P2P device / GO / client discovery,
+full P2P + WSC IE parse, RSN IE parse with PMF/AKM/PMKID detection,
+driver capability probe (`iw phy`), P2P Service Discovery
+(Bonjour/UPnP/WSD/SSDP), Wi-Fi Aware / NAN scanner, P2P Public Action
+sniffer, EAPOL / WSC M1..M8 sniffer.
+
+Active attacks: PMF-gated deauth, 4-way EAPOL handshake capture, PMKID
+capture (Steube 2018) with correct hashcat 22000 line, hashcat 22000
+pipeline, WPS Pixie-Dust (reaver -K and native-from-pcap), WPS PIN
+External Registrar brute, WPS PBC session-overlap race, Rogue Group
+Owner with WPA2 or WPA3-SAE transition mode, KARMA probe-response
+responder, P2P Invitation Request rejoin, GO Negotiation intent
+hijack, Notice-of-Absence starvation, beacon flood with synthetic
+P2P GOs, Provision Discovery flood, P2P MAC clone, cross-connection
+pivot probe.
+
+Fuzzers: protocol-aware P2P Public Action fuzzer for PD-Req /
+GO-Neg-Req / Invitation-Req with 802.11 element-length safe encoding
+and liveness gate; Miracast RTSP mutation fuzzer plus a minimal
+Miracast responder to observe source M4/M5.
 
 Full matrix with preconditions and CVSS references: [docs/attack-matrix.md](docs/attack-matrix.md).
 
@@ -44,7 +50,11 @@ Linux, root, 802.11 adapter with monitor + injection.
 External binaries: `iw`, `ip`, `rfkill`, `wpa_supplicant`, `wpa_cli`,
 `hostapd`, `dnsmasq`, `aircrack-ng`, `reaver`, `pixiewps`, `tshark`.
 
-Python: 3.10+, `scapy>=2.5`, `cryptography>=41`.
+Optional external binaries: `hcxpcapngtool`, `hashcat` (for PMKID and
+4-way-handshake offline cracking).
+
+Python: 3.10+, `scapy>=2.5`, `cryptography>=41`, `pytest>=7` for the
+test suite.
 
 ```
 sudo apt install iw wireless-tools wpasupplicant hostapd dnsmasq \
@@ -69,19 +79,38 @@ Avoid RTL8188EUS (TL-WN722N v2/v3) and brcmfmac (broken injection).
 ## Layout
 
 ```
-scan.py                                CLI entry
+scan.py                                CLI entry (25 subcommands)
 docs/
   usage.md                             step by step usage guide
   attack-matrix.md                     coverage + preconditions
   finding-schema.json                  JSON schema for findings output
+tests/                                 pytest suite (29 tests)
 src/wifidirect_pentest/
-  core/         interface, channels, IE parser, finding model, builders
-  scanners/     discovery, wps facts, service discovery
-  sniffers/     p2p frames, EAPOL/WSC labelling
-  attacks/      deauth, beacon flood, pd flood, pbc race, wps pin brute,
-                pixiedust, handshake capture, rogue GO, mac spoof
-  reporting/    JSON writer, human formatter, offline novelty gate
+  core/         interface, channels, IE parser, RSN parser,
+                driver capability probe, finding model + builders
+  scanners/     discovery, WSC facts, service discovery, NAN scanner
+  sniffers/     P2P frames, EAPOL / WSC labelling
+  attacks/      deauth (PMF-gated), beacon flood, PD flood, PBC race,
+                WPS PIN brute, Pixie-Dust (reaver + native), handshake
+                capture, hashcat 22000 pipeline, PMKID capture, rogue
+                GO (WPA2 or SAE transition), KARMA responder,
+                Invitation rejoin, GO-Neg hijack, NoA starvation,
+                MAC spoof, cross-connection pivot
+  fuzzers/      P2P Public Action frame fuzzer, Miracast RTSP fuzzer
+  reporting/    JSON writer, human formatter, offline + NVD novelty gate
 ```
+
+## Testing
+
+```
+python3 -m pytest tests/ -q
+```
+
+Covers P2P and WSC IE parsers, RSN parser, finding schema conformance,
+novelty gate false-positive guard, PMKID KDE extraction, Miracast fuzz
+case determinism, NAN attribute parser, and the review-fix regression
+suite (WSC OUI collision with DH keys, hashcat outfile format, P2P
+Status attribute walk, element-length validity).
 
 ## Output model
 

