@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "wfdx Finding",
+  "type": "object",
+  "required": ["id", "title", "cwe", "confidence", "target", "attacker_position",
+               "location", "data_flow", "trigger", "evidence"],
+  "properties": {
+    "id": {"type": "string"},
+    "title": {"type": "string"},
+    "cwe": {"type": "string"},
+    "confidence": {"type": "string", "enum": ["hypothesis", "likely", "confirmed"]},
+    "target": {"type": "string"},
+    "version": {"type": ["string", "null"]},
+    "hw_revision": {"type": ["string", "null"]},
+    "app_version": {"type": ["string", "null"]},
+    "artifact_sha256": {"type": ["string", "null"]},
+    "attacker_position": {"type": "string"},
+    "location": {
+      "type": "object",
+      "properties": {
+        "value": {"type": "string"},
+        "inferred": {"type": "boolean"}
+      },
+      "required": ["value"]
+    },
+    "data_flow": {"type": "string"},
+    "trigger": {"type": "string"},
+    "confirmation": {
+      "type": ["object", "null"],
+      "properties": {
+        "type": {"type": "string", "enum": ["script", "oneliner", "manual"]},
+        "content": {"type": "string"}
+      }
+    },
+    "evidence": {"type": "string"},
+    "exploit_chain": {"type": "string"},
+    "observable": {"type": "string"},
+    "cvss_v40_score": {"type": ["number", "null"]},
+    "cvss_v40_vector": {"type": ["string", "null"]},
+    "cvss_v31_vector": {"type": ["string", "null"]},
+    "novelty": {
+      "type": "object",
+      "properties": {
+        "checked": {"type": "boolean"},
+        "known_cve": {"type": ["string", "null"]},
+        "notes": {"type": ["string", "null"]}
+      }
+    },
+    "fix": {"type": "string"},
+    "created_ts": {"type": "number"}
+  }
+}
