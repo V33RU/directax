@@ -33,9 +33,10 @@ monitor-mode reliability for `discover`, `sniff`, `handshake`,
 | AWUS036ACM              | MediaTek MT7612U | mt76x2u          | 2.4 + 5       | reliable  | yes      | reliable | Mainline driver; best current all-round pick |
 | AWUS036AC               | Realtek RTL8812AU| 88XXau (DKMS)    | 2.4 + 5       | reliable  | yes      | reliable | Older enclosure, same silicon as ACH |
 | AWUS1900                | Realtek RTL8814AU| 8814au (DKMS)    | 2.4 + 5       | reliable  | yes      | reliable | 4x4 MIMO; high tx power; aircrack-ng DKMS |
-| AWUS036AXM / AXER       | MediaTek MT7921U | mt7921u          | 2.4 + 5 + 6   | partial   | yes      | reliable | Wi-Fi 6E variant of AXML without long-range front-end |
-| AWUS036AXML             | MediaTek MT7921AU| mt7921u          | 2.4 + 5 + 6   | partial   | yes      | reliable | Wi-Fi 6E, long-range; single-card monitor via `iw set type` fallback |
-| AWUS036AX               | MediaTek MT7921U | mt7921u          | 2.4 + 5 + 6   | partial   | yes      | reliable | Same driver as AXML |
+| AWUS036AXM              | MediaTek MT7921U | mt7921u          | 2.4 + 5       | partial   | yes      | reliable | Wi-Fi 6 (802.11ax), 2x2 MIMO |
+| AWUS036AXER             | MediaTek MT7921AU| mt7921u          | 2.4 + 5 + 6   | partial   | yes      | reliable | Wi-Fi 6E variant; 6 GHz enabled on the SKU |
+| AWUS036AXML             | MediaTek MT7921AU| mt7921u          | 2.4 + 5       | partial   | yes      | reliable | Wi-Fi 6 (not 6E, not Wi-Fi 7). Chip supports 6 GHz but the AXML SKU is 2.4/5 only. Single-card monitor via `iw set type` fallback. |
+| AWUS036AX               | MediaTek MT7921U | mt7921u          | 2.4 + 5       | partial   | yes      | reliable | Same driver as AXML |
 
 ### Legacy Alfa models (still work for a subset)
 
