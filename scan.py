@@ -211,7 +211,7 @@ def _print_device_detail(mac: str, d, wps) -> None:
         print(f"  primary dev type  : {decode_pdt(wps.primary_device_type) or '-'}")
         print(f"  uuid-e            : {wps.uuid_e or '-'}")
         print(f"  config methods    : {wps.config_methods_hex} "
-              f"[{', '.join(wps.config_method_labels)}]")
+              f"[{', '.join(wps.config_methods_labels)}]")
         print(f"  device password id: {wps.device_password_id}")
         print(f"  ap setup locked   : {wps.ap_setup_locked}")
         print(f"  selected registrar: {wps.selected_registrar}")

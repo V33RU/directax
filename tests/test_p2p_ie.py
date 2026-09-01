@@ -44,10 +44,10 @@ def test_p2p_parser_full():
 def test_wsc_composite_bits():
     payload = _wsc_tlv(0x1008, b"\x00\x88")  # Display + PushButton only
     info = parse_wsc_ie(payload)
-    assert "PushButton" in info.config_method_labels
-    assert "Display" in info.config_method_labels
-    assert "VirtualPushButton" not in info.config_method_labels
-    assert "PhysicalPushButton" not in info.config_method_labels
+    assert "PushButton" in info.config_methods_labels
+    assert "Display" in info.config_methods_labels
+    assert "VirtualPushButton" not in info.config_methods_labels
+    assert "PhysicalPushButton" not in info.config_methods_labels
 
 
 def test_wsc_all_common_fields():
@@ -73,7 +73,7 @@ def test_wsc_all_common_fields():
     assert info.manufacturer == "Acme"
     assert info.model_name == "Model"
     assert info.device_name == "DevX"
-    assert "VirtualPushButton" in info.config_method_labels
+    assert "VirtualPushButton" in info.config_methods_labels
     assert info.rf_bands == 0x03
 
 
@@ -81,8 +81,8 @@ def test_config_method_bits_no_partial_match():
     # 0x0004 (Label) must not appear if 0x0004 bit not set
     payload = _wsc_tlv(0x1008, b"\x00\x80")  # PushButton only
     info = parse_wsc_ie(payload)
-    assert "Label" not in info.config_method_labels
-    assert "PushButton" in info.config_method_labels
+    assert "Label" not in info.config_methods_labels
+    assert "PushButton" in info.config_methods_labels
 
 
 def test_channel_list_multiple_op_classes():
