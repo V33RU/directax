@@ -705,7 +705,51 @@ def _common_parser() -> argparse.ArgumentParser:
     c.add_argument("--show-hypothesis", action="store_true",
                    help="include LIKELY/HYPOTHESIS entries in human output")
     c.add_argument("--evidence-dir", default="evidence")
+    c.add_argument("--pick-adapter", action="store_true",
+                   help="show a numbered menu of wireless adapters and prompt")
     return c
+
+
+def _pick_adapter_interactive() -> str | None:
+    """Print every wireless iface with its DIRECTAX profile status and prompt."""
+    ifaces = _list_wireless_ifaces()
+    if not ifaces:
+        print("no wireless interfaces detected", file=sys.stderr)
+        return None
+    rows: list[tuple[str, str, str, str]] = []
+    for name in ifaces:
+        try:
+            caps = probe_driver(name)
+        except Exception as e:
+            rows.append((name, "?", "PROBE-FAIL", str(e)))
+            continue
+        prof = profile_for(caps.driver)
+        ok, _ = readiness(prof)
+        rows.append((name, caps.driver or "?",
+                     "READY" if ok else "LIMITED",
+                     prof.display_name))
+    print("\nWireless adapters:", file=sys.stderr)
+    for i, (name, drv, status, disp) in enumerate(rows, 1):
+        print(f"  {i}. {name:22} {drv:12} {status:8} {disp}", file=sys.stderr)
+    print("", file=sys.stderr)
+    try:
+        raw = input(f"select adapter [1-{len(rows)}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("cancelled", file=sys.stderr)
+        return None
+    try:
+        idx = int(raw)
+    except ValueError:
+        # allow selection by exact iface name too
+        for name, *_ in rows:
+            if name == raw:
+                return name
+        print(f"invalid selection: {raw!r}", file=sys.stderr)
+        return None
+    if not 1 <= idx <= len(rows):
+        print(f"out of range: {idx}", file=sys.stderr)
+        return None
+    return rows[idx - 1][0]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -939,13 +983,34 @@ def main() -> int:
         "invitation", "noa-starve", "goneg-hijack", "pmkid", "cross-conn",
         "driver-probe", "karma", "nan-scan", "p2p-fuzz",
     }
+    wants_pick = ("--pick-adapter" in sys.argv)
+    asking_help = any(a in ("-h", "--help") for a in sys.argv)
     if (any(a in _IFACE_SUBCMDS for a in sys.argv)
+            and not asking_help
             and not any(a in ("-i", "--iface") for a in sys.argv)):
-        resolved = _resolve_iface()
-        if resolved:
+        if wants_pick:
+            resolved = _pick_adapter_interactive()
+            if not resolved:
+                return 2
             sys.argv.extend(["-i", resolved])
-            if not os.environ.get("DIRECTAX_NO_BANNER"):
-                print(f"[directax] using adapter: {resolved}", file=sys.stderr)
+            print(f"[directax] picked adapter: {resolved}", file=sys.stderr)
+        else:
+            resolved = _resolve_iface()
+            if resolved:
+                sys.argv.extend(["-i", resolved])
+                try:
+                    caps = probe_driver(resolved)
+                    prof = profile_for(caps.driver)
+                    src = ("DIRECTAX_IFACE env" if os.environ.get("DIRECTAX_IFACE")
+                           else "sole READY adapter")
+                    print(f"[directax] auto-selected {resolved} "
+                          f"({prof.display_name}, {caps.driver or '?'}) "
+                          f"[{src}]", file=sys.stderr)
+                    print(f"[directax] override: -i <iface>  |  "
+                          f"pick menu: --pick-adapter", file=sys.stderr)
+                except Exception:
+                    print(f"[directax] auto-selected {resolved}",
+                          file=sys.stderr)
     parser = build_parser()
     args = parser.parse_args()
     if not os.environ.get("DIRECTAX_NO_BANNER"):
