@@ -31,6 +31,34 @@ plausible default that still needs on-air validation on your card.
 
 Use these for passive `discover` and `sniff` only.
 
+## Firmware
+
+DIRECTAX does **not** build, patch, or flash any custom firmware. Every
+attack module runs on top of the factory firmware your adapter shipped
+with, plus the mainline (or DKMS) driver, plus the standard Linux Wi-Fi
+stack (`nl80211`, `iw`, `hostapd`, `wpa_supplicant`, raw packet sockets
+via scapy).
+
+There is no binary to upload to the card.
+
+### What custom firmware would unlock (informational, not required)
+
+| Firmware project              | Card family            | What it unlocks                      | Required by DIRECTAX?             |
+|-------------------------------|------------------------|--------------------------------------|-----------------------------------|
+| Nexmon                        | Broadcom BCM4339/43455 | monitor + injection on Pi / Nexus    | No; those cards are out of scope  |
+| ath9k_htc modded firmware     | Atheros AR9271         | small retry-timing improvements      | No                                |
+| mt76 debug firmware           | MT76xx / MT79xx        | active-monitor mode                  | No; would only tighten the p2p-fuzz liveness gate |
+| OpenFWWF                      | old Broadcom bcm43xx   | monitor + injection                  | No                                |
+| RTL8812AU firmware patches    | RTL8812AU              | tx power beyond regulatory limits    | No; not shipped, likely illegal   |
+
+## Kernel-module build case: RTL8812AU / RTL8814AU
+
+The mainline `rtw88` driver does not support injection. Cards using
+RTL8812AU (Alfa AWUS036ACH / ACS) or RTL8814AU (Alfa AWUS1900) require
+the aircrack-ng DKMS driver on top of factory firmware. This is a
+kernel module build, not a firmware flash; the card itself is not
+touched.
+
 ## Installing the aircrack-ng DKMS driver for RTL8812AU / 8814AU
 
 ```

@@ -76,6 +76,13 @@ sudo python3 scan.py --preflight
 
 Avoid RTL8188EUS (TL-WN722N v2/v3) and brcmfmac (broken injection).
 
+**No custom firmware is required or built.** DIRECTAX runs on the
+factory firmware every listed card ships with. See
+[docs/adapters.md](docs/adapters.md#firmware) for the full firmware
+matrix. The one case that needs an out-of-tree kernel module (not a
+firmware flash) is RTL8812AU / RTL8814AU, which needs the aircrack-ng
+DKMS driver; snippet in the same doc.
+
 ## Layout
 
 ```
