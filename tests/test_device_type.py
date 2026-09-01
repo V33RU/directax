@@ -27,9 +27,22 @@ def test_oui_alfa_and_common_vendors():
     assert lookup("00:c0:ca:ba:4c:85") == "Alfa Networks"
     assert lookup("f8:b7:e2:11:22:33") == "Samsung"
     assert lookup("acbc32aabbcc") == "Apple"
+    assert lookup("10:5a:95:46:2f:b2") == "Samsung Electronics"
 
 
 def test_oui_unknown_returns_none():
-    assert lookup("aa:aa:aa:aa:aa:aa") is None
+    # aa:aa... has the LAA bit set, so it now gets tagged as LAA
+    assert "LAA" in lookup("aa:aa:aa:aa:aa:aa")
+    # unknown UAA (universally-administered) still returns None
+    assert lookup("40:11:22:33:44:55") is None
     assert lookup("") is None
     assert lookup(None) is None
+
+
+def test_oui_laa_bit_marks_randomized():
+    # 7e = 0111 1110, second bit set -> LAA
+    got = lookup("7e:b0:de:49:02:e2")
+    assert got is not None and "LAA" in got
+    # 02:... is the P2P Interface Address prefix that DIRECTAX itself uses
+    got2 = lookup("02:aa:bb:cc:dd:ee")
+    assert got2 is not None and "LAA" in got2

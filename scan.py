@@ -230,11 +230,45 @@ def _print_device_detail(mac: str, d, wps) -> None:
 def cmd_discover(args) -> int:
     from wifidirect_pentest.core.device_type import decode as decode_pdt
     from wifidirect_pentest.core.oui import lookup as oui_lookup
+    from wifidirect_pentest.scanners.p2p_search import P2PSearchProber
     _require_root()
+    if args.active and not args.authorized:
+        raise SystemExit(
+            "--active requires --authorized. Probe Requests are "
+            "harmless but count as injection under the DIRECTAX policy.")
     ifc, mon = _open_monitor(args.iface)
     try:
         disc = Discovery(mon, dwell_ms=args.dwell)
-        devices = disc.run(duration=args.duration)
+        if args.active:
+            prober = P2PSearchProber(mon)
+            # Interleave: kick off a background prober thread that fires
+            # broadcast + directed Probe Requests every second while the
+            # passive sniffer runs.
+            import threading
+            stop = threading.Event()
+            known: set[str] = set()
+
+            def _prober_loop():
+                while not stop.is_set():
+                    prober.probe_broadcast()
+                    for b in list(known):
+                        prober.probe_directed(b)
+                    time.sleep(1.0)
+
+            def _feed_known(dev):
+                for b in dev.bssids:
+                    known.add(b)
+
+            disc.on_new = _feed_known
+            t = threading.Thread(target=_prober_loop, daemon=True)
+            t.start()
+            try:
+                devices = disc.run(duration=args.duration)
+            finally:
+                stop.set()
+                t.join(timeout=2.0)
+        else:
+            devices = disc.run(duration=args.duration)
     finally:
         ifc.restore()
     result = {"devices": {mac: d.as_dict() for mac, d in devices.items()}}
@@ -772,6 +806,11 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--dwell", type=int, default=500, help="ms per social channel")
     d.add_argument("--detail", action="store_true",
                    help="after the table, print every parsed field per device")
+    d.add_argument("--active", action="store_true",
+                   help="also send P2P Search Probe Requests to elicit "
+                        "richer Probe Responses (requires --authorized)")
+    d.add_argument("--authorized", action="store_true",
+                   help="acknowledge you have permission to send frames")
     d.set_defaults(func=cmd_discover)
 
     s = _add("sniff")
