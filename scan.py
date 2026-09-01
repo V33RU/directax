@@ -56,6 +56,7 @@ from wifidirect_pentest.attacks import (BeaconFlood, DeauthFlood,  # noqa: E402
                                         confirmed_pivot, hashcat_crack,
                                         pixie_from_pcap)
 from wifidirect_pentest.core.driver_probe import probe as probe_driver  # noqa: E402
+from wifidirect_pentest.core.adapters import profile_for, readiness  # noqa: E402
 from wifidirect_pentest.attacks.karma_responder import KarmaResponder  # noqa: E402
 from wifidirect_pentest.fuzzers import MiracastFuzzer, MiracastSink, P2PFrameFuzzer  # noqa: E402
 from wifidirect_pentest.scanners.nan import NANScanner  # noqa: E402
@@ -69,6 +70,51 @@ def _require_root() -> None:
     if os.geteuid() != 0:
         print("wfdx requires root (raw sockets + iface control).", file=sys.stderr)
         sys.exit(2)
+
+
+def _list_wireless_ifaces() -> list[str]:
+    """Enumerate wireless interfaces via /sys/class/net."""
+    import glob
+    out: list[str] = []
+    for p in sorted(glob.glob("/sys/class/net/*/wireless")):
+        name = p.rsplit("/", 2)[-2]
+        out.append(name)
+    return out
+
+
+def _preflight_adapters() -> None:
+    ifaces = _list_wireless_ifaces()
+    if not ifaces:
+        print("adapters: no wireless interfaces detected")
+        return
+    print("adapters:")
+    for name in ifaces:
+        try:
+            caps = probe_driver(name)
+        except Exception as e:
+            print(f"  {name:10} probe failed: {e}")
+            continue
+        prof = profile_for(caps.driver)
+        ok, blockers = readiness(prof)
+        modes = []
+        if prof.p2p_support:
+            modes.append("P2P")
+        if caps.supports_active_monitor:
+            modes.append("active-monitor")
+        if caps.supports_5ghz:
+            modes.append("5GHz")
+        if caps.supports_6ghz:
+            modes.append("6GHz")
+        status = "READY" if ok else "LIMITED"
+        print(f"  {name:10} {caps.driver or '?':12} {status:8} "
+              f"{prof.display_name}")
+        if modes:
+            print(f"             modes: {' '.join(modes)}")
+        if prof.notes:
+            for n in prof.notes:
+                print(f"             note:  {n}")
+        for b in blockers:
+            print(f"             block: {b}")
 
 
 def _open_monitor(iface: str) -> tuple[Interface, str]:
@@ -721,9 +767,10 @@ def main() -> int:
         missing = preflight()
         if missing:
             print("missing:", ", ".join(missing))
-            return 1
-        print("all required tools present")
-        return 0
+        else:
+            print("all required tools present")
+        _preflight_adapters()
+        return 1 if missing else 0
     if not getattr(args, "func", None):
         parser.print_help()
         return 2
