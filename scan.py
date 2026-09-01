@@ -41,7 +41,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src
 
 from wifidirect_pentest.banner import print_banner  # noqa: E402
 from wifidirect_pentest.core import Interface, get_logger  # noqa: E402
-from wifidirect_pentest.core.interface import preflight, unblock_rfkill  # noqa: E402
+from wifidirect_pentest.core.interface import (InterfaceError, preflight,  # noqa: E402
+                                               unblock_rfkill)
 from wifidirect_pentest.core.finding import (Confidence, Confirmation,  # noqa: E402
                                              Finding, Location, load_findings)
 from wifidirect_pentest.core import finding_builders as fb  # noqa: E402
@@ -542,26 +543,38 @@ def _emit(findings: list[Finding], args) -> None:
     print_human_summary(findings, show_hypothesis=getattr(args, "show_hypothesis", False))
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="directax", description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--verbose", action="store_true")
-    p.add_argument("--output", help="write JSON findings to path")
-    p.add_argument("--show-hypothesis", action="store_true",
+def _common_parser() -> argparse.ArgumentParser:
+    """Shared flags accepted at either the top level or after the subcommand."""
+    c = argparse.ArgumentParser(add_help=False)
+    c.add_argument("--verbose", action="store_true")
+    c.add_argument("--output", help="write JSON findings to path")
+    c.add_argument("--show-hypothesis", action="store_true",
                    help="include LIKELY/HYPOTHESIS entries in human output")
-    p.add_argument("--evidence-dir", default="evidence")
+    c.add_argument("--evidence-dir", default="evidence")
+    return c
+
+
+def build_parser() -> argparse.ArgumentParser:
+    common = _common_parser()
+    p = argparse.ArgumentParser(prog="directax", description=__doc__,
+                                parents=[common],
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--preflight", action="store_true",
                    help="check required external tools and exit")
 
     sub = p.add_subparsers(dest="cmd")
 
-    d = sub.add_parser("discover")
+    def _add(name: str, **kw) -> argparse.ArgumentParser:
+        kw.setdefault("parents", [common])
+        return sub.add_parser(name, **kw)
+
+    d = _add("discover")
     d.add_argument("-i", "--iface", required=True)
     d.add_argument("--duration", type=float, default=60.0)
     d.add_argument("--dwell", type=int, default=500, help="ms per social channel")
     d.set_defaults(func=cmd_discover)
 
-    s = sub.add_parser("sniff")
+    s = _add("sniff")
     s.add_argument("-i", "--iface", required=True)
     s.add_argument("--duration", type=float, default=60.0)
     s.add_argument("--p2p-pcap", default="evidence/p2p.pcap")
@@ -569,7 +582,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--bssid", default=None)
     s.set_defaults(func=cmd_sniff)
 
-    de = sub.add_parser("deauth")
+    de = _add("deauth")
     de.add_argument("-i", "--iface", required=True)
     de.add_argument("--go", required=True, help="target GO BSSID")
     de.add_argument("--client", default="ff:ff:ff:ff:ff:ff")
@@ -578,7 +591,7 @@ def build_parser() -> argparse.ArgumentParser:
     de.add_argument("--authorized", action="store_true")
     de.set_defaults(func=cmd_deauth)
 
-    bf = sub.add_parser("beacon-flood")
+    bf = _add("beacon-flood")
     bf.add_argument("-i", "--iface", required=True)
     bf.add_argument("--count", type=int, default=30)
     bf.add_argument("--channel", type=int, default=6)
@@ -587,21 +600,21 @@ def build_parser() -> argparse.ArgumentParser:
     bf.add_argument("--authorized", action="store_true")
     bf.set_defaults(func=cmd_beacon_flood)
 
-    pf = sub.add_parser("pd-flood")
+    pf = _add("pd-flood")
     pf.add_argument("-i", "--iface", required=True)
     pf.add_argument("--target", required=True)
     pf.add_argument("--count", type=int, default=500)
     pf.add_argument("--authorized", action="store_true")
     pf.set_defaults(func=cmd_pd_flood)
 
-    pb = sub.add_parser("pbc-race")
+    pb = _add("pbc-race")
     pb.add_argument("-i", "--iface", required=True, help="managed iface (wpa_supplicant)")
     pb.add_argument("--target", required=True)
     pb.add_argument("--walk-time", type=float, default=30.0)
     pb.add_argument("--authorized", action="store_true")
     pb.set_defaults(func=cmd_pbc_race)
 
-    wp = sub.add_parser("wps-pin")
+    wp = _add("wps-pin")
     wp.add_argument("-i", "--iface", required=True)
     wp.add_argument("--go", required=True)
     wp.add_argument("--channel", type=int, required=True)
@@ -609,7 +622,7 @@ def build_parser() -> argparse.ArgumentParser:
     wp.add_argument("--authorized", action="store_true")
     wp.set_defaults(func=cmd_wps_pin)
 
-    px = sub.add_parser("pixie")
+    px = _add("pixie")
     px.add_argument("-i", "--iface", required=True)
     px.add_argument("--go", required=True)
     px.add_argument("--channel", type=int, required=True)
@@ -617,14 +630,14 @@ def build_parser() -> argparse.ArgumentParser:
     px.add_argument("--authorized", action="store_true")
     px.set_defaults(func=cmd_pixie)
 
-    hs = sub.add_parser("handshake")
+    hs = _add("handshake")
     hs.add_argument("-i", "--iface", required=True)
     hs.add_argument("--go", required=True)
     hs.add_argument("--channel", type=int, required=True)
     hs.add_argument("--duration", type=float, default=30.0)
     hs.set_defaults(func=cmd_handshake)
 
-    rg = sub.add_parser("rogue-go")
+    rg = _add("rogue-go")
     rg.add_argument("-i", "--iface", required=True)
     rg.add_argument("--ssid", required=True)
     rg.add_argument("--bssid", required=True)
@@ -639,18 +652,18 @@ def build_parser() -> argparse.ArgumentParser:
     rg.add_argument("--authorized", action="store_true")
     rg.set_defaults(func=cmd_rogue_go)
 
-    au = sub.add_parser("audit")
+    au = _add("audit")
     au.add_argument("-i", "--iface", required=True)
     au.add_argument("--discovery-time", type=float, default=45.0)
     au.add_argument("--target-mac", default=None)
     au.add_argument("--authorized", action="store_true")
     au.set_defaults(func=cmd_audit)
 
-    nc = sub.add_parser("novelty-check")
+    nc = _add("novelty-check")
     nc.add_argument("--input", required=True)
     nc.set_defaults(func=cmd_novelty_check)
 
-    inv = sub.add_parser("invitation")
+    inv = _add("invitation")
     inv.add_argument("-i", "--iface", required=True)
     inv.add_argument("--target", required=True, help="target P2P Device Address")
     inv.add_argument("--group-bssid", required=True)
@@ -659,7 +672,7 @@ def build_parser() -> argparse.ArgumentParser:
     inv.add_argument("--authorized", action="store_true")
     inv.set_defaults(func=cmd_invitation)
 
-    na = sub.add_parser("noa-starve")
+    na = _add("noa-starve")
     na.add_argument("-i", "--iface", required=True)
     na.add_argument("--go", required=True, help="GO BSSID to impersonate")
     na.add_argument("--ssid", required=True)
@@ -669,7 +682,7 @@ def build_parser() -> argparse.ArgumentParser:
     na.add_argument("--authorized", action="store_true")
     na.set_defaults(func=cmd_noa)
 
-    gn = sub.add_parser("goneg-hijack")
+    gn = _add("goneg-hijack")
     gn.add_argument("-i", "--iface", required=True)
     gn.add_argument("--our-mac", required=True)
     gn.add_argument("--channel", type=int, default=6)
@@ -677,7 +690,7 @@ def build_parser() -> argparse.ArgumentParser:
     gn.add_argument("--authorized", action="store_true")
     gn.set_defaults(func=cmd_goneg)
 
-    pm = sub.add_parser("pmkid")
+    pm = _add("pmkid")
     pm.add_argument("-i", "--iface", required=True)
     pm.add_argument("--go", required=True)
     pm.add_argument("--channel", type=int, required=True)
@@ -686,7 +699,7 @@ def build_parser() -> argparse.ArgumentParser:
     pm.add_argument("--authorized", action="store_true")
     pm.set_defaults(func=cmd_pmkid)
 
-    cc = sub.add_parser("cross-conn")
+    cc = _add("cross-conn")
     cc.add_argument("-i", "--iface", required=True,
                     help="joined P2P client iface (e.g. p2p-wlan0-0)")
     cc.add_argument("--pivot-target", default=None,
@@ -695,25 +708,25 @@ def build_parser() -> argparse.ArgumentParser:
                     help="P2P Manageability attr value from discovery (e.g. 0x00)")
     cc.set_defaults(func=cmd_cross_conn)
 
-    dp = sub.add_parser("driver-probe")
+    dp = _add("driver-probe")
     dp.add_argument("-i", "--iface", required=True)
     dp.set_defaults(func=cmd_driver_probe)
 
-    hc = sub.add_parser("hashcat")
+    hc = _add("hashcat")
     hc.add_argument("--pcap", required=True)
     hc.add_argument("--wordlist", required=True)
     hc.add_argument("--rules", default=None)
     hc.add_argument("--runtime", type=int, default=300)
     hc.set_defaults(func=cmd_hashcat)
 
-    pxp = sub.add_parser("pixie-pcap")
+    pxp = _add("pixie-pcap")
     pxp.add_argument("--pcap", required=True,
                      help="pcap containing WPS M1/M2/M3")
     pxp.add_argument("--flags", nargs="*", default=None,
                      help="extra flags forwarded to pixiewps")
     pxp.set_defaults(func=cmd_pixie_pcap)
 
-    kr = sub.add_parser("karma")
+    kr = _add("karma")
     kr.add_argument("-i", "--iface", required=True)
     kr.add_argument("--our-bssid", required=True,
                     help="BSSID to advertise in probe responses")
@@ -724,12 +737,12 @@ def build_parser() -> argparse.ArgumentParser:
     kr.add_argument("--authorized", action="store_true")
     kr.set_defaults(func=cmd_karma)
 
-    nan = sub.add_parser("nan-scan")
+    nan = _add("nan-scan")
     nan.add_argument("-i", "--iface", required=True)
     nan.add_argument("--duration", type=float, default=60.0)
     nan.set_defaults(func=cmd_nan)
 
-    mf = sub.add_parser("miracast-fuzz")
+    mf = _add("miracast-fuzz")
     mf.add_argument("--sink", required=True, help="IP address of Miracast sink")
     mf.add_argument("--port", type=int, default=7236)
     mf.add_argument("--cases", type=int, default=64)
@@ -737,14 +750,14 @@ def build_parser() -> argparse.ArgumentParser:
     mf.add_argument("--authorized", action="store_true")
     mf.set_defaults(func=cmd_miracast_fuzz)
 
-    ms = sub.add_parser("miracast-sink")
+    ms = _add("miracast-sink")
     ms.add_argument("--host", default="0.0.0.0")
     ms.add_argument("--port", type=int, default=7236)
     ms.add_argument("--duration", type=float, default=300.0)
     ms.add_argument("--log-path", default="evidence/miracast_sink.log")
     ms.set_defaults(func=cmd_miracast_sink)
 
-    pf = sub.add_parser("p2p-fuzz")
+    pf = _add("p2p-fuzz")
     pf.add_argument("-i", "--iface", required=True)
     pf.add_argument("--target", required=True)
     pf.add_argument("--cases", type=int, default=200)
@@ -774,7 +787,11 @@ def main() -> int:
     if not getattr(args, "func", None):
         parser.print_help()
         return 2
-    return args.func(args)
+    try:
+        return args.func(args)
+    except InterfaceError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":
