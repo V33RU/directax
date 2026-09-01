@@ -157,10 +157,29 @@ to include internal triage entries.
 - Memory-corruption results stop at reproducible crash + ASAN backtrace.
   No shellcode, no ROP chain, no persistence payload.
 
+## Sample run
+
+Real bench output from a first-time run against an Alfa AWUS036AXML
+(MediaTek MT7921AU, `mt7921u`). Three P2P Group Owners captured
+passively on channels 1, 6, and 11 in a residential RF environment:
+
+```
+DEVICE             ROLE  SSID/NAME  CH  dBm   SIG   WPS  PBC  PIN  LOCK  PERS  MFR      TYPE / MODEL
+-----------------  ----  ---------  --  ----  ----  ---  ---  ---  ----  ----  -------  ------------
+10:5a:95:46:2f:b2  GO    (hidden)   11   -64  ###.  yes  no   no   yes   no    Samsung
+7e:b0:de:49:02:e2  GO    (hidden)    6   -72  ##..  yes  no   no   -     no
+16:32:51:cd:c6:cc  GO    (hidden)    1   -85  #...  yes  no   no   -     no
+```
+
+Full walkthrough with preflight, driver-probe, per-device detail
+block, adapter picker, and `--active` mode: [docs/sample-run.md](docs/sample-run.md).
+
 ## Documentation
 
 - [docs/usage.md](docs/usage.md) full command reference with examples
 - [docs/attack-matrix.md](docs/attack-matrix.md) attack coverage
+- [docs/adapters.md](docs/adapters.md) supported hardware and firmware policy
+- [docs/sample-run.md](docs/sample-run.md) real bench-run walkthrough
 - [docs/finding-schema.json](docs/finding-schema.json) output schema
 
 ## License
