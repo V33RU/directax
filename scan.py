@@ -172,7 +172,64 @@ def _yn(v) -> str:
     return "-"
 
 
+def _rssi_bar(rssi: int | None) -> str:
+    """Signal strength bar. dBm typical range: -30 (excellent) to -90 (dead)."""
+    if rssi is None:
+        return "----"
+    if rssi >= -50:
+        return "####"
+    if rssi >= -65:
+        return "###."
+    if rssi >= -75:
+        return "##.."
+    if rssi >= -85:
+        return "#..."
+    return "...."
+
+
+def _print_device_detail(mac: str, d, wps) -> None:
+    from wifidirect_pentest.core.device_type import decode as decode_pdt
+    from wifidirect_pentest.core.oui import lookup as oui_lookup
+    print(f"\n=== {mac} ===")
+    print(f"  role              : {d.role}")
+    print(f"  bssids            : {', '.join(sorted(d.bssids)) or '-'}")
+    print(f"  interface addrs   : {', '.join(sorted(d.interface_addrs)) or '-'}")
+    print(f"  ssids seen        : {', '.join(sorted(d.ssids)) or '-'}")
+    print(f"  channels seen     : {', '.join(str(c) for c in sorted(d.channels_seen))}")
+    print(f"  rssi last / best  : {d.rssi_last} / {d.rssi_best} dBm")
+    print(f"  first seen        : {time.strftime('%H:%M:%S', time.localtime(d.first_seen))}")
+    print(f"  last seen         : {time.strftime('%H:%M:%S', time.localtime(d.last_seen))}")
+    print(f"  frames            : {d.frame_counts}")
+    print(f"  vendor (OUI)      : {oui_lookup(mac) or 'unknown'}")
+    if wps.wps_present:
+        print(f"  --- WSC ---")
+        print(f"  version           : {wps.version}")
+        print(f"  manufacturer      : {wps.manufacturer or '-'}")
+        print(f"  model name        : {wps.model_name or '-'}")
+        print(f"  model number      : {getattr(wps, 'model_number', None) or '-'}")
+        print(f"  device name       : {wps.device_name or '-'}")
+        print(f"  primary dev type  : {decode_pdt(wps.primary_device_type) or '-'}")
+        print(f"  uuid-e            : {wps.uuid_e or '-'}")
+        print(f"  config methods    : {wps.config_methods_hex} "
+              f"[{', '.join(wps.config_method_labels)}]")
+        print(f"  device password id: {wps.device_password_id}")
+        print(f"  ap setup locked   : {wps.ap_setup_locked}")
+        print(f"  selected registrar: {wps.selected_registrar}")
+    if d.p2p:
+        print(f"  --- P2P ---")
+        print(f"  capability        : {d.p2p.capability}")
+        print(f"  persistent group  : {d.p2p.persistent_group}")
+        print(f"  manageability     : {d.p2p.manageability}")
+        print(f"  group bssid       : {d.p2p.group_bssid or '-'}")
+        print(f"  group id ssid     : {d.p2p.group_id_ssid or '-'}")
+        print(f"  operating channel : {d.p2p.operating_channel or '-'}")
+        print(f"  listen channel    : {d.p2p.listen_channel or '-'}")
+        print(f"  channel list      : {d.p2p.channel_list or '-'}")
+
+
 def cmd_discover(args) -> int:
+    from wifidirect_pentest.core.device_type import decode as decode_pdt
+    from wifidirect_pentest.core.oui import lookup as oui_lookup
     _require_root()
     ifc, mon = _open_monitor(args.iface)
     try:
@@ -187,26 +244,42 @@ def cmd_discover(args) -> int:
     print(f"\ndiscovered {len(devices)} P2P devices\n")
     if not devices:
         return 0
+
     rows: list[list[str]] = []
-    for mac, d in devices.items():
+    # Rank by best RSSI descending so the strongest signal is first
+    ordered = sorted(devices.items(),
+                     key=lambda kv: kv[1].rssi_best or -999, reverse=True)
+    for mac, d in ordered:
         wps = inspect_wps(d)
-        ssid = next(iter(d.ssids), "") or (wps.device_name or "(hidden)")
+        ssid = (next(iter(d.ssids), "")
+                or wps.device_name
+                or (d.p2p.group_id_ssid if d.p2p else None)
+                or "(hidden)")
         ch = ",".join(str(c) for c in sorted(d.channels_seen)) or "-"
         persistent = bool(getattr(d.p2p, "persistent_group", False)) if d.p2p else False
+        pdt = decode_pdt(wps.primary_device_type)
+        mfr = wps.manufacturer or oui_lookup(mac) or ""
         rows.append([
             mac, d.role,
             ssid[:24], ch,
+            f"{d.rssi_best:>4}" if d.rssi_best is not None else "  --",
+            _rssi_bar(d.rssi_best),
             _yn(wps.wps_present),
             _yn(wps.pbc_supported),
             _yn(wps.pin_supported),
             _yn(wps.ap_setup_locked),
             _yn(persistent),
-            (wps.manufacturer or "")[:14],
-            (wps.model_name or "")[:14],
+            mfr[:14],
+            (pdt or wps.model_name or "")[:20],
         ])
     _print_table(rows, ["DEVICE", "ROLE", "SSID/NAME", "CH",
+                        "dBm", "SIG",
                         "WPS", "PBC", "PIN", "LOCK", "PERS",
-                        "MFR", "MODEL"])
+                        "MFR", "TYPE / MODEL"])
+
+    if args.detail:
+        for mac, d in ordered:
+            _print_device_detail(mac, d, inspect_wps(d))
     return 0
 
 
@@ -653,6 +726,8 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("-i", "--iface", required=True)
     d.add_argument("--duration", type=float, default=60.0)
     d.add_argument("--dwell", type=int, default=500, help="ms per social channel")
+    d.add_argument("--detail", action="store_true",
+                   help="after the table, print every parsed field per device")
     d.set_defaults(func=cmd_discover)
 
     s = _add("sniff")
