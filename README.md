@@ -65,23 +65,62 @@ sudo python3 scan.py --preflight
 
 ## Supported adapters
 
-| Chipset         | Driver              | Bands           | Notes                                         |
+DIRECTAX matches the kernel driver id from
+`/sys/class/net/<iface>/device/driver` against the profile table in
+`core/adapters.py`. Any card whose driver is listed below works.
+
+### Alfa Networks (currently sold)
+
+| Model                | Chipset          | Driver           | Bands       | Injection | P2P mode | Monitor  | Notes |
+|----------------------|------------------|------------------|-------------|-----------|----------|----------|-------|
+| AWUS036NHA           | Atheros AR9271   | ath9k_htc        | 2.4         | reliable  | yes      | reliable | Best cheap starter; every subcommand works on one card |
+| Tube-U(N) / Tube-UNA | Atheros AR9271   | ath9k_htc        | 2.4         | reliable  | yes      | reliable | Same silicon as AWUS036NHA in a weatherproof shell |
+| AWUS036NH            | Ralink RT3070    | rt2800usb        | 2.4         | reliable  | no       | reliable | Needs a second adapter for pbc-race / rogue-go |
+| AWUS036NEH           | Ralink RT3070    | rt2800usb        | 2.4         | reliable  | no       | reliable | Compact form factor; same driver caveat |
+| AWUS036ACS           | RTL8811AU        | 88XXau (DKMS)    | 2.4 / 5     | reliable  | yes      | reliable | Requires aircrack-ng DKMS driver |
+| AWUS036ACH           | RTL8812AU        | 88XXau (DKMS)    | 2.4 / 5     | reliable  | yes      | reliable | Aircrack-ng DKMS; 2x2 MIMO |
+| AWUS036ACHM          | RTL8812BU        | 88x2bu (DKMS)    | 2.4 / 5     | partial   | partial  | reliable | Driver less mature; deauth works, pbc-race unreliable |
+| AWUS036ACM           | MediaTek MT7612U | mt76x2u          | 2.4 / 5     | reliable  | yes      | reliable | Mainline driver; best current all-round |
+| AWUS036AC            | RTL8812AU        | 88XXau (DKMS)    | 2.4 / 5     | reliable  | yes      | reliable | Older enclosure, same silicon as ACH |
+| AWUS1900             | RTL8814AU        | 8814au (DKMS)    | 2.4 / 5     | reliable  | yes      | reliable | 4x4 MIMO; high tx power |
+| AWUS036AXM           | MediaTek MT7921U | mt7921u          | 2.4 / 5     | partial   | yes      | reliable | Wi-Fi 6 (802.11ax), 2x2 MIMO |
+| AWUS036AXER          | MediaTek MT7921AU| mt7921u          | 2.4 / 5 / 6 | partial   | yes      | reliable | Wi-Fi 6E variant with 6 GHz enabled |
+| AWUS036AXML          | MediaTek MT7921AU| mt7921u          | 2.4 / 5     | partial   | yes      | reliable | **Bench-verified.** Wi-Fi 6, not Wi-Fi 7. Single-card monitor via in-place iface swap |
+| AWUS036AX            | MediaTek MT7921U | mt7921u          | 2.4 / 5     | partial   | yes      | reliable | Same driver as AXML |
+
+### Alfa legacy models (still work for a subset)
+
+| Model         | Chipset          | Driver     | Bands | Injection | Notes |
+|---------------|------------------|------------|-------|-----------|-------|
+| AWUS036H      | RTL8187          | rtl8187    | 2.4   | partial   | Very old; discovery + sniff OK, WPS attacks unreliable |
+| AWUS036NEH-R  | Ralink RT3070    | rt2800usb  | 2.4   | reliable  | Refresh of AWUS036NEH |
+| AWUS036N      | RTL8188RU        | rtl8xxxu   | 2.4   | broken    | Do not use for injection; passive only |
+
+### Non-Alfa adapters that also work
+
+| Chipset         | Driver              | Bands           | Common cards                                  |
 |-----------------|---------------------|-----------------|-----------------------------------------------|
-| Atheros AR9271  | ath9k_htc           | 2.4             | Reliable injection, mainline                  |
-| Ralink RT3070   | rt2800usb           | 2.4             | Legacy but stable                             |
-| Realtek 8812AU  | 88XXau (aircrack-ng)| 2.4 / 5         | Requires DKMS driver, not rtw88               |
-| MediaTek 7612U  | mt76x2u             | 2.4 / 5         | Mainline, best all-round pick                 |
-| MediaTek 7921U  | mt7921u             | 2.4 / 5 / 6     | Wi-Fi 6, P2P concurrent mode driver-limited   |
-| Intel AX2xx     | iwlwifi             | 2.4 / 5 / 6     | Monitor only; firmware blocks injection       |
+| Atheros AR9271  | ath9k_htc           | 2.4             | TP-Link TL-WN722N v1, Panda PAU05             |
+| Atheros AR9xxx  | ath9k               | 2.4 / 5         | Most 802.11n mini-PCIe cards                  |
+| MediaTek MT7612U| mt76x2u             | 2.4 / 5         | Panda PAU0F, Comfast CF-WU782AC               |
+| MediaTek MT7921U| mt7921u             | 2.4 / 5 (+6)    | Cudy WU850S, several 2024 USB Wi-Fi 6 dongles |
 
-Avoid RTL8188EUS (TL-WN722N v2/v3) and brcmfmac (broken injection).
+### Do NOT use these
 
-**No custom firmware is required or built.** DIRECTAX runs on the
-factory firmware every listed card ships with. See
-[docs/adapters.md](docs/adapters.md#firmware) for the full firmware
-matrix. The one case that needs an out-of-tree kernel module (not a
-firmware flash) is RTL8812AU / RTL8814AU, which needs the aircrack-ng
-DKMS driver; snippet in the same doc.
+| Adapter                 | Driver    | Why |
+|-------------------------|-----------|-----|
+| TL-WN722N v2 / v3       | rtl8xxxu  | RTL8188EUS; injection broken |
+| RTL8812AU on mainline   | rtw88_usb | mainline rtw88 does not support injection; use aircrack-ng 88XXau DKMS instead |
+| Raspberry Pi built-in   | brcmfmac  | firmware-managed; injection blocked |
+| Most laptop internal    | iwlwifi   | Intel firmware restricts management-frame injection |
+| Broadcom-based USB      | brcmfmac  | passive only |
+
+### No firmware to flash
+
+DIRECTAX does not build, patch, or flash any firmware. Every card
+above runs on its factory firmware plus its mainline (or DKMS)
+driver. Full firmware policy and the aircrack-ng DKMS install
+snippet for RTL8812AU / RTL8814AU: [docs/adapters.md](docs/adapters.md#firmware).
 
 ## Layout
 
