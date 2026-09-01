@@ -151,6 +151,27 @@ def _open_monitor(iface: str) -> tuple[Interface, str]:
     return ifc, mon
 
 
+def _print_table(rows: list[list[str]], headers: list[str]) -> None:
+    if not rows:
+        return
+    widths = [max(len(str(r[i])) for r in [headers] + rows)
+              for i in range(len(headers))]
+    def fmt(row: list) -> str:
+        return "  ".join(str(cell).ljust(w) for cell, w in zip(row, widths))
+    print(fmt(headers))
+    print("  ".join("-" * w for w in widths))
+    for r in rows:
+        print(fmt(r))
+
+
+def _yn(v) -> str:
+    if v is True:
+        return "yes"
+    if v is False:
+        return "no"
+    return "-"
+
+
 def cmd_discover(args) -> int:
     _require_root()
     ifc, mon = _open_monitor(args.iface)
@@ -163,13 +184,29 @@ def cmd_discover(args) -> int:
     if args.output:
         with open(args.output, "w") as f:
             json.dump(result, f, indent=2, default=str)
-    print(f"discovered {len(devices)} P2P devices")
+    print(f"\ndiscovered {len(devices)} P2P devices\n")
+    if not devices:
+        return 0
+    rows: list[list[str]] = []
     for mac, d in devices.items():
         wps = inspect_wps(d)
-        print(f"  {mac:17}  role={d.role:4}  ssid={sorted(d.ssids)}  "
-              f"ch={sorted(d.channels_seen)}  wps={wps.wps_present}  "
-              f"pbc={wps.pbc_supported}  pin={wps.pin_supported}  "
-              f"locked={wps.ap_setup_locked}")
+        ssid = next(iter(d.ssids), "") or (wps.device_name or "(hidden)")
+        ch = ",".join(str(c) for c in sorted(d.channels_seen)) or "-"
+        persistent = bool(getattr(d.p2p, "persistent_group", False)) if d.p2p else False
+        rows.append([
+            mac, d.role,
+            ssid[:24], ch,
+            _yn(wps.wps_present),
+            _yn(wps.pbc_supported),
+            _yn(wps.pin_supported),
+            _yn(wps.ap_setup_locked),
+            _yn(persistent),
+            (wps.manufacturer or "")[:14],
+            (wps.model_name or "")[:14],
+        ])
+    _print_table(rows, ["DEVICE", "ROLE", "SSID/NAME", "CH",
+                        "WPS", "PBC", "PIN", "LOCK", "PERS",
+                        "MFR", "MODEL"])
     return 0
 
 
