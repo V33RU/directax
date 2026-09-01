@@ -27,6 +27,7 @@ Subcommands:
   p2p-fuzz      Protocol-aware P2P Public Action frame fuzzer
   audit         Discover targets and run every safe active check with confirmation
   novelty-check Run only the known-issue gate on an existing findings JSON
+  select-adapter Print export line for DIRECTAX_IFACE (auto-picks if only one READY)
 """
 from __future__ import annotations
 
@@ -71,6 +72,29 @@ def _require_root() -> None:
     if os.geteuid() != 0:
         print("wfdx requires root (raw sockets + iface control).", file=sys.stderr)
         sys.exit(2)
+
+
+def _auto_ready_iface() -> str | None:
+    """Return the sole READY wireless interface, or None if 0 or >1."""
+    ready: list[str] = []
+    for name in _list_wireless_ifaces():
+        try:
+            caps = probe_driver(name)
+        except Exception:
+            continue
+        prof = profile_for(caps.driver)
+        ok, _ = readiness(prof)
+        if ok:
+            ready.append(name)
+    return ready[0] if len(ready) == 1 else None
+
+
+def _resolve_iface() -> str | None:
+    """Priority: DIRECTAX_IFACE env, else the unique READY adapter."""
+    env = os.environ.get("DIRECTAX_IFACE")
+    if env:
+        return env
+    return _auto_ready_iface()
 
 
 def _list_wireless_ifaces() -> list[str]:
@@ -525,6 +549,26 @@ def cmd_p2p_fuzz(args) -> int:
     return 0 if r.get("crash_suspects") == 0 else 2
 
 
+def cmd_select_adapter(args) -> int:
+    iface = args.iface or _resolve_iface()
+    if not iface:
+        wireless = _list_wireless_ifaces()
+        print("no adapter selected. wireless interfaces detected: "
+              + (", ".join(wireless) if wireless else "none"),
+              file=sys.stderr)
+        return 1
+    try:
+        caps = probe_driver(iface)
+        prof = profile_for(caps.driver)
+    except Exception as e:
+        print(f"probe failed on {iface}: {e}", file=sys.stderr)
+        return 1
+    print(f"# selected {iface} ({caps.driver}, {prof.display_name})",
+          file=sys.stderr)
+    print(f"export DIRECTAX_IFACE={iface}")
+    return 0
+
+
 def cmd_novelty_check(args) -> int:
     findings = load_findings(args.input)
     findings = NoveltyGate().apply(findings)
@@ -663,6 +707,11 @@ def build_parser() -> argparse.ArgumentParser:
     nc.add_argument("--input", required=True)
     nc.set_defaults(func=cmd_novelty_check)
 
+    sa = _add("select-adapter")
+    sa.add_argument("iface", nargs="?",
+                    help="iface name; omit to auto-pick the sole READY adapter")
+    sa.set_defaults(func=cmd_select_adapter)
+
     inv = _add("invitation")
     inv.add_argument("-i", "--iface", required=True)
     inv.add_argument("--target", required=True, help="target P2P Device Address")
@@ -770,6 +819,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    # Subcommands that accept -i / --iface. Auto-fill only fires when
+    # one of these appears in argv and the user did not pass -i.
+    _IFACE_SUBCMDS = {
+        "discover", "sniff", "deauth", "beacon-flood", "pd-flood",
+        "pbc-race", "wps-pin", "pixie", "handshake", "rogue-go", "audit",
+        "invitation", "noa-starve", "goneg-hijack", "pmkid", "cross-conn",
+        "driver-probe", "karma", "nan-scan", "p2p-fuzz",
+    }
+    if (any(a in _IFACE_SUBCMDS for a in sys.argv)
+            and not any(a in ("-i", "--iface") for a in sys.argv)):
+        resolved = _resolve_iface()
+        if resolved:
+            sys.argv.extend(["-i", resolved])
+            if not os.environ.get("DIRECTAX_NO_BANNER"):
+                print(f"[directax] using adapter: {resolved}", file=sys.stderr)
     parser = build_parser()
     args = parser.parse_args()
     if not os.environ.get("DIRECTAX_NO_BANNER"):
