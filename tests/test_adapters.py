@@ -7,7 +7,7 @@ from wifidirect_pentest.core.radiotap import radiotap_for
 
 def test_known_alfa_chipsets_have_profiles():
     for driver in ("ath9k_htc", "rt2800usb", "mt76x2u", "mt7921u",
-                   "88XXau", "8814au"):
+                   "88XXau", "8814au", "88x2bu", "rtl8187"):
         assert driver in PROFILES, f"missing profile for {driver}"
         assert PROFILES[driver].injection in {"reliable", "partial", "broken"}
 
