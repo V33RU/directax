@@ -21,8 +21,7 @@ Subcommands:
   hashcat       Convert pcap and run hashcat 22000
   driver-probe  Print driver capability report for an interface
   karma         KARMA-style probe-response responder alongside rogue-GO
-  nan-scan      Passive Wi-Fi Aware / NAN scanner
-  miracast-fuzz Mutation fuzzer against a Miracast RTSP sink
+  miracast-fuzz Mutation fuzzer against a Miracast RTSP sink (runs on top of a P2P group)
   miracast-sink Trivial Miracast responder to observe source M4/M5
   p2p-fuzz      Protocol-aware P2P Public Action frame fuzzer
   audit         Discover targets and run every safe active check with confirmation
@@ -61,7 +60,6 @@ from wifidirect_pentest.core.driver_probe import probe as probe_driver  # noqa: 
 from wifidirect_pentest.core.adapters import profile_for, readiness  # noqa: E402
 from wifidirect_pentest.attacks.karma_responder import KarmaResponder  # noqa: E402
 from wifidirect_pentest.fuzzers import MiracastFuzzer, MiracastSink, P2PFrameFuzzer  # noqa: E402
-from wifidirect_pentest.scanners.nan import NANScanner  # noqa: E402
 from wifidirect_pentest.reporting import (NoveltyGate, print_human_summary,  # noqa: E402
                                           write_run)
 
@@ -644,18 +642,6 @@ def cmd_karma(args) -> int:
     return 0
 
 
-def cmd_nan(args) -> int:
-    _require_root()
-    ifc, mon = _open_monitor(args.iface)
-    try:
-        n = NANScanner(mon)
-        r = n.run(duration=args.duration)
-    finally:
-        ifc.restore()
-    print(json.dumps(r, indent=2))
-    return 0
-
-
 def cmd_miracast_fuzz(args) -> int:
     if not args.authorized:
         raise SystemExit("--authorized required for active fuzzing")
@@ -981,11 +967,6 @@ def build_parser() -> argparse.ArgumentParser:
     kr.add_argument("--authorized", action="store_true")
     kr.set_defaults(func=cmd_karma)
 
-    nan = _add("nan-scan")
-    nan.add_argument("-i", "--iface", required=True)
-    nan.add_argument("--duration", type=float, default=60.0)
-    nan.set_defaults(func=cmd_nan)
-
     mf = _add("miracast-fuzz")
     mf.add_argument("--sink", required=True, help="IP address of Miracast sink")
     mf.add_argument("--port", type=int, default=7236)
@@ -1020,7 +1001,7 @@ def main() -> int:
         "discover", "sniff", "deauth", "beacon-flood", "pd-flood",
         "pbc-race", "wps-pin", "pixie", "handshake", "rogue-go", "audit",
         "invitation", "noa-starve", "goneg-hijack", "pmkid", "cross-conn",
-        "driver-probe", "karma", "nan-scan", "p2p-fuzz",
+        "driver-probe", "karma", "p2p-fuzz",
     }
     wants_pick = ("--pick-adapter" in sys.argv)
     asking_help = any(a in ("-h", "--help") for a in sys.argv)

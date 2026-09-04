@@ -14,9 +14,8 @@ emitted to default output.
 | 3 | RSN IE parse (PMF, AKM, PMKID list) | core/rsn.py | parsed dict |
 | 4 | Driver capability probe | core/driver_probe.py | JSON caps + warnings |
 | 5 | P2P Service Discovery (Bonjour, UPnP, WSD, SSDP) | scanners/service.py | SD-Response TLV dump |
-| 6 | Wi-Fi Aware / NAN passive scanner | scanners/nan.py | cluster + service IDs, FTM ranging bit |
-| 7 | P2P Public Action sniffer | sniffers/p2p_sniffer.py | pcap + subtype histogram |
-| 8 | EAPOL / WSC M1..M8 sniffer | sniffers/eapol_sniffer.py | pcap + message-type histogram |
+| 6 | P2P Public Action sniffer | sniffers/p2p_sniffer.py | pcap + subtype histogram |
+| 7 | EAPOL / WSC M1..M8 sniffer | sniffers/eapol_sniffer.py | pcap + message-type histogram |
 
 ## Active attacks
 
@@ -60,4 +59,3 @@ emitted to default output.
 - IEEE 802.11 fragmentation and reassembly cache (FragAttacks family).
 - WSC IE parsers in vendor NDIS and Wi-Fi Direct middleware.
 - Miracast RTSP layer once the P2P group is up (fuzzers/miracast_rtsp.py is the entry point).
-- NAN Service Descriptor filter parsing (Wi-Fi Aware Spec v4.0 table 10 attribute 0x03).

@@ -393,12 +393,6 @@ sudo python3 scan.py karma -i wlan0 \
      --deny 'CorporateWiFi' --authorized
 ```
 
-### Wi-Fi Aware / NAN scanner
-
-```
-sudo python3 scan.py nan-scan -i wlan0 --duration 60
-```
-
 ### Miracast RTSP sink and fuzzer
 
 Stand up a Miracast responder to log source M4/M5 for inspection:

@@ -16,6 +16,16 @@ relevant IEEE 802.11 amendments (11-2020, 11w, 11u). Findings follow a
 two-phase model: HYPOTHESIS then CONFIRMATION. Only findings with a
 recorded observable effect are emitted at `confidence: confirmed`.
 
+## Scope
+
+**Wi-Fi Direct (P2P) only.** The tool targets the Wi-Fi P2P
+Technical Specification frame types, the WSC provisioning layer that
+Group Formation uses, and the wpa_supplicant / hostapd P2P code
+paths. General 802.11 attacks (KRACK, FragAttacks, Kr00k, Framing
+Frames, SSID Confusion, Dragonblood, Blast-RADIUS) are out of scope.
+Wi-Fi Aware (NAN) is a separate protocol and is out of scope.
+Miracast is included because it runs on top of a P2P group.
+
 ## Attack surface covered
 
 25 subcommands across discovery, sniffing, active attacks, and fuzzing.
@@ -23,8 +33,8 @@ recorded observable effect are emitted at `confidence: confirmed`.
 Discovery and inspection: passive P2P device / GO / client discovery,
 full P2P + WSC IE parse, RSN IE parse with PMF/AKM/PMKID detection,
 driver capability probe (`iw phy`), P2P Service Discovery
-(Bonjour/UPnP/WSD/SSDP), Wi-Fi Aware / NAN scanner, P2P Public Action
-sniffer, EAPOL / WSC M1..M8 sniffer.
+(Bonjour/UPnP/WSD/SSDP), P2P Public Action sniffer, EAPOL / WSC
+M1..M8 sniffer.
 
 Active attacks: PMF-gated deauth, 4-way EAPOL handshake capture, PMKID
 capture (Steube 2018) with correct hashcat 22000 line, hashcat 22000
@@ -39,7 +49,8 @@ pivot probe.
 Fuzzers: protocol-aware P2P Public Action fuzzer for PD-Req /
 GO-Neg-Req / Invitation-Req with 802.11 element-length safe encoding
 and liveness gate; Miracast RTSP mutation fuzzer plus a minimal
-Miracast responder to observe source M4/M5.
+Miracast responder to observe source M4/M5 (Miracast runs on top of
+a Wi-Fi Direct group).
 
 Full matrix with preconditions and CVSS references: [docs/attack-matrix.md](docs/attack-matrix.md).
 
@@ -134,7 +145,7 @@ tests/                                 pytest suite (29 tests)
 src/wifidirect_pentest/
   core/         interface, channels, IE parser, RSN parser,
                 driver capability probe, finding model + builders
-  scanners/     discovery, WSC facts, service discovery, NAN scanner
+  scanners/     discovery, WSC facts, service discovery
   sniffers/     P2P frames, EAPOL / WSC labelling
   attacks/      deauth (PMF-gated), beacon flood, PD flood, PBC race,
                 WPS PIN brute, Pixie-Dust (reaver + native), handshake
@@ -153,10 +164,11 @@ python3 -m pytest tests/ -q
 ```
 
 Covers P2P and WSC IE parsers, RSN parser, finding schema conformance,
-novelty gate false-positive guard, PMKID KDE extraction, Miracast fuzz
-case determinism, NAN attribute parser, and the review-fix regression
-suite (WSC OUI collision with DH keys, hashcat outfile format, P2P
-Status attribute walk, element-length validity).
+novelty gate false-positive guard, PMKID KDE extraction, Miracast
+fuzz case determinism, adapter profile table, WSC device-type / OUI
+lookup, and the review-fix regression suite (WSC OUI collision with
+DH keys, hashcat outfile format, P2P Status attribute walk,
+element-length validity).
 
 ## Output model
 
