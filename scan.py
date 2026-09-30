@@ -27,6 +27,10 @@ Subcommands:
   audit         Discover targets and run every safe active check with confirmation
   novelty-check Run only the known-issue gate on an existing findings JSON
   select-adapter Print export line for DIRECTAX_IFACE (auto-picks if only one READY)
+  cve-2014-0997 Android P2P Probe Response DoS via malformed WSC Device Name
+  cve-2019-17666 rtlwifi P2P Notice of Absence kernel heap overflow
+  cve-2021-0326 wpa_supplicant P2P peer info buffer overflow via PD-Req
+  cve-2021-27803 wpa_supplicant p2p_pd.c Provision Discovery UAF/DoS
 """
 from __future__ import annotations
 
@@ -59,6 +63,10 @@ from wifidirect_pentest.attacks import (BeaconFlood, DeauthFlood,  # noqa: E402
 from wifidirect_pentest.core.driver_probe import probe as probe_driver  # noqa: E402
 from wifidirect_pentest.core.adapters import profile_for, readiness  # noqa: E402
 from wifidirect_pentest.attacks.karma_responder import KarmaResponder  # noqa: E402
+from wifidirect_pentest.attacks.cve_2014_0997 import CVE_2014_0997  # noqa: E402
+from wifidirect_pentest.attacks.cve_2019_17666 import CVE_2019_17666  # noqa: E402
+from wifidirect_pentest.attacks.cve_2021_0326 import CVE_2021_0326  # noqa: E402
+from wifidirect_pentest.attacks.cve_2021_27803 import CVE_2021_27803  # noqa: E402
 from wifidirect_pentest.fuzzers import MiracastFuzzer, MiracastSink, P2PFrameFuzzer  # noqa: E402
 from wifidirect_pentest.reporting import (NoveltyGate, print_human_summary,  # noqa: E402
                                           write_run)
@@ -699,6 +707,33 @@ def cmd_select_adapter(args) -> int:
     return 0
 
 
+_CVE_TABLE = {
+    "cve-2014-0997": CVE_2014_0997,
+    "cve-2019-17666": CVE_2019_17666,
+    "cve-2021-0326": CVE_2021_0326,
+    "cve-2021-27803": CVE_2021_27803,
+}
+
+
+def cmd_cve(args) -> int:
+    _require_root()
+    if not args.authorized:
+        raise SystemExit(
+            f"--authorized required for {args.cve}. This module fires a "
+            f"trigger frame at the target and observes for silence. It is "
+            f"a DoS-class check by design and stops at reproducible crash.")
+    cls = _CVE_TABLE[args.cve]
+    ifc, mon = _open_monitor(args.iface)
+    try:
+        mod = cls(mon, args.target, channel=args.channel,
+                  evidence_dir=args.evidence_dir)
+        r = mod.run()
+    finally:
+        ifc.restore()
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("confirmed") else 1
+
+
 def cmd_novelty_check(args) -> int:
     findings = load_findings(args.input)
     findings = NoveltyGate().apply(findings)
@@ -991,6 +1026,21 @@ def build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--authorized", action="store_true")
     pf.set_defaults(func=cmd_p2p_fuzz)
 
+    # Targeted CVE reproducers (each stops at reproducible crash / silence)
+    for cve_id, doc in [
+        ("cve-2014-0997", "Android P2P Probe Response DoS (WSC Device Name)"),
+        ("cve-2019-17666", "rtlwifi P2P NoA IE kernel heap overflow"),
+        ("cve-2021-0326", "wpa_supplicant P2P peer info buffer overflow"),
+        ("cve-2021-27803", "wpa_supplicant p2p_pd Provision Discovery UAF/DoS"),
+    ]:
+        c = _add(cve_id)
+        c.add_argument("-i", "--iface", required=True)
+        c.add_argument("--target", required=True,
+                       help="target P2P Interface Address or BSSID")
+        c.add_argument("--channel", type=int, required=True)
+        c.add_argument("--authorized", action="store_true")
+        c.set_defaults(func=cmd_cve, cve=cve_id, doc=doc)
+
     return p
 
 
@@ -1002,6 +1052,8 @@ def main() -> int:
         "pbc-race", "wps-pin", "pixie", "handshake", "rogue-go", "audit",
         "invitation", "noa-starve", "goneg-hijack", "pmkid", "cross-conn",
         "driver-probe", "karma", "p2p-fuzz",
+        "cve-2014-0997", "cve-2019-17666",
+        "cve-2021-0326", "cve-2021-27803",
     }
     wants_pick = ("--pick-adapter" in sys.argv)
     asking_help = any(a in ("-h", "--help") for a in sys.argv)

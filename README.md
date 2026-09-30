@@ -231,7 +231,8 @@ block, adapter picker, and `--active` mode: [docs/sample-run.md](docs/sample-run
 - [docs/attack-matrix.md](docs/attack-matrix.md) attack coverage
 - [docs/adapters.md](docs/adapters.md) supported hardware and firmware policy
 - [docs/sample-run.md](docs/sample-run.md) real bench-run walkthrough
-- [docs/references.md](docs/references.md) CVEs, research papers, tools, and specs (~110 items)
+- [docs/references.md](docs/references.md) Wi-Fi Direct CVEs, papers, tools, specs
+- [docs/cve-coverage.md](docs/cve-coverage.md) which CVEs DIRECTAX ships a targeted reproducer for
 - [docs/finding-schema.json](docs/finding-schema.json) output schema
 
 ## License
