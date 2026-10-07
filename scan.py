@@ -34,7 +34,13 @@ Subcommands:
   cve-2023-38147 Windows Miracast Wireless Display RTSP heap overflow
   miracast-scan Scan only Miracast devices with full WFD IE decode
   miracast-probe RTSP M1-M3 active probe against a sink IP (post-join)
-  miracast-uibc UIBC HID event injection against a Miracast source
+  miracast-session Drive full RTSP M1-M7 session lifecycle on a sink
+  miracast-rogue-source Act as a rogue source against a sink (reach PLAY)
+  miracast-hdcp Inspect HDCP state and run a content-protection downgrade test
+  miracast-wfd-fuzz Protocol-aware wfd_* parameter + EDID fuzzer
+  miracast-join Auto-join a sink P2P group via wpa_cli and resolve its IP
+  miracast-uibc UIBC keyboard event injection against a Miracast source
+  miracast-uibc-click UIBC mouse/touch pointer injection against a source
 """
 from __future__ import annotations
 
@@ -74,8 +80,13 @@ from wifidirect_pentest.attacks.cve_2021_27803 import CVE_2021_27803  # noqa: E4
 from wifidirect_pentest.attacks.cve_2023_38147 import CVE_2023_38147  # noqa: E402
 from wifidirect_pentest.attacks.miracast_probe import MiracastProbe  # noqa: E402
 from wifidirect_pentest.attacks.miracast_uibc import MiracastUIBCInjector  # noqa: E402
+from wifidirect_pentest.attacks.miracast_session import MiracastSession  # noqa: E402
+from wifidirect_pentest.attacks.miracast_rogue_source import MiracastRogueSource  # noqa: E402
+from wifidirect_pentest.attacks.miracast_hdcp import MiracastHdcpTest  # noqa: E402
+from wifidirect_pentest.attacks.miracast_join import MiracastJoin  # noqa: E402
 from wifidirect_pentest.scanners.miracast import filter_miracast, is_miracast  # noqa: E402
 from wifidirect_pentest.fuzzers import MiracastFuzzer, MiracastSink, P2PFrameFuzzer  # noqa: E402
+from wifidirect_pentest.fuzzers.miracast_wfd_params import WfdParamFuzzer  # noqa: E402
 from wifidirect_pentest.reporting import (NoveltyGate, print_human_summary,  # noqa: E402
                                           write_run)
 
@@ -900,6 +911,77 @@ def cmd_cve_2023_38147(args) -> int:
     return 0 if r.get("confirmed") else 1
 
 
+def cmd_miracast_session(args) -> int:
+    if not args.authorized:
+        raise SystemExit("--authorized required (drives RTSP M1-M7 on sink)")
+    session = MiracastSession(args.sink, port=args.port)
+    result = session.run(stopAt=args.stop_at)
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("reachable") else 1
+
+
+def cmd_miracast_rogue_source(args) -> int:
+    if not args.authorized:
+        raise SystemExit(
+            "--authorized required. Acts as a Miracast source against the "
+            "sink; lab targets you own only.")
+    rogue = MiracastRogueSource(args.sink, port=args.port,
+                                tsFile=args.ts_file)
+    result = rogue.run(streamMedia=args.stream)
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("confirmed") else 1
+
+
+def cmd_miracast_hdcp(args) -> int:
+    if not args.authorized:
+        raise SystemExit("--authorized required (runs HDCP downgrade test)")
+    test = MiracastHdcpTest(args.sink, port=args.port)
+    result = test.run()
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("confirmed") else 1
+
+
+def cmd_miracast_wfd_fuzz(args) -> int:
+    if not args.authorized:
+        raise SystemExit("--authorized required (fuzzes sink RTSP parser)")
+    fuzzer = WfdParamFuzzer(args.sink, port=args.port,
+                            evidenceDir=args.evidence_dir)
+    result = fuzzer.run(seed=args.seed)
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("reachable") else 1
+
+
+def cmd_miracast_join(args) -> int:
+    _require_root()
+    if not args.authorized:
+        raise SystemExit("--authorized required (joins the sink P2P group)")
+    joiner = MiracastJoin(args.iface, args.sink_mac)
+    result = joiner.run()
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("joined") else 1
+
+
+def cmd_miracast_uibc_click(args) -> int:
+    if not args.authorized:
+        raise SystemExit(
+            "--authorized required. Injects pointer events into the source; "
+            "lab targets you own only.")
+    injector = MiracastUIBCInjector(args.source, args.uibc_port)
+    if not injector.connect():
+        print(json.dumps({"connected": False,
+                          "reason": "UIBC TCP connect failed"}, indent=2))
+        return 1
+    if args.touch:
+        sent = injector.tapAt(args.x, args.y)
+    else:
+        sent = injector.clickAt(args.x, args.y)
+    injector.close()
+    print(json.dumps({"connected": True, "packets_sent": sent,
+                      "x": args.x, "y": args.y,
+                      "mode": "touch" if args.touch else "mouse"}, indent=2))
+    return 0 if sent else 1
+
+
 def cmd_novelty_check(args) -> int:
     findings = load_findings(args.input)
     findings = NoveltyGate().apply(findings)
@@ -1249,6 +1331,55 @@ def build_parser() -> argparse.ArgumentParser:
     cve_mc.add_argument("--authorized", action="store_true")
     cve_mc.set_defaults(func=cmd_cve_2023_38147)
 
+    ms_session = _add("miracast-session")
+    ms_session.add_argument("--sink", required=True)
+    ms_session.add_argument("--port", type=int, default=7236)
+    ms_session.add_argument("--stop-at", default="play",
+                            choices=["m3", "m4", "m6", "play"])
+    ms_session.add_argument("--authorized", action="store_true")
+    ms_session.set_defaults(func=cmd_miracast_session)
+
+    ms_rogue = _add("miracast-rogue-source")
+    ms_rogue.add_argument("--sink", required=True)
+    ms_rogue.add_argument("--port", type=int, default=7236)
+    ms_rogue.add_argument("--ts-file", default=None,
+                          help="lab MPEG-TS file to stream after PLAY")
+    ms_rogue.add_argument("--stream", action="store_true",
+                          help="stream --ts-file over RTP after session accept")
+    ms_rogue.add_argument("--authorized", action="store_true")
+    ms_rogue.set_defaults(func=cmd_miracast_rogue_source)
+
+    ms_hdcp = _add("miracast-hdcp")
+    ms_hdcp.add_argument("--sink", required=True)
+    ms_hdcp.add_argument("--port", type=int, default=7236)
+    ms_hdcp.add_argument("--authorized", action="store_true")
+    ms_hdcp.set_defaults(func=cmd_miracast_hdcp)
+
+    ms_wfdfuzz = _add("miracast-wfd-fuzz")
+    ms_wfdfuzz.add_argument("--sink", required=True)
+    ms_wfdfuzz.add_argument("--port", type=int, default=7236)
+    ms_wfdfuzz.add_argument("--seed", type=int, default=0)
+    ms_wfdfuzz.add_argument("--authorized", action="store_true")
+    ms_wfdfuzz.set_defaults(func=cmd_miracast_wfd_fuzz)
+
+    ms_join = _add("miracast-join")
+    ms_join.add_argument("-i", "--iface", required=True,
+                         help="managed iface running wpa_supplicant")
+    ms_join.add_argument("--sink-mac", required=True,
+                         help="sink P2P Device Address")
+    ms_join.add_argument("--authorized", action="store_true")
+    ms_join.set_defaults(func=cmd_miracast_join)
+
+    ms_click = _add("miracast-uibc-click")
+    ms_click.add_argument("--source", required=True)
+    ms_click.add_argument("--uibc-port", type=int, required=True)
+    ms_click.add_argument("--x", type=int, required=True)
+    ms_click.add_argument("--y", type=int, required=True)
+    ms_click.add_argument("--touch", action="store_true",
+                          help="send a touch event instead of mouse click")
+    ms_click.add_argument("--authorized", action="store_true")
+    ms_click.set_defaults(func=cmd_miracast_uibc_click)
+
     return p
 
 
@@ -1262,7 +1393,7 @@ def main() -> int:
         "driver-probe", "karma", "p2p-fuzz",
         "cve-2014-0997", "cve-2019-17666",
         "cve-2021-0326", "cve-2021-27803",
-        "miracast-scan",
+        "miracast-scan", "miracast-join",
     }
     wants_pick = ("--pick-adapter" in sys.argv)
     asking_help = any(a in ("-h", "--help") for a in sys.argv)
