@@ -242,9 +242,21 @@ def cmd_discover(args) -> int:
         raise SystemExit(
             "--active requires --authorized. Probe Requests are "
             "harmless but count as injection under the DIRECTAX policy.")
+    from wifidirect_pentest.core.channels import (SOCIAL_CHANNELS,
+                                                  FULL_HOP_2GHZ, FULL_HOP_5GHZ)
+    if args.channels:
+        try:
+            channels = tuple(int(c.strip()) for c in args.channels.split(","))
+        except ValueError:
+            raise SystemExit(f"invalid --channels value: {args.channels!r}")
+    elif args.all_bands:
+        channels = FULL_HOP_2GHZ + FULL_HOP_5GHZ
+    else:
+        channels = SOCIAL_CHANNELS
+
     ifc, mon = _open_monitor(args.iface)
     try:
-        disc = Discovery(mon, dwell_ms=args.dwell)
+        disc = Discovery(mon, channels=channels, dwell_ms=args.dwell)
         if args.active:
             prober = P2PSearchProber(mon)
             # Interleave: kick off a background prober thread that fires
@@ -282,7 +294,29 @@ def cmd_discover(args) -> int:
         with open(args.output, "w") as f:
             json.dump(result, f, indent=2, default=str)
     print(f"\ndiscovered {len(devices)} P2P devices\n")
+    # RF-level diagnostics so an empty result is explainable
+    print(f"RF stats on channels {list(channels)}:")
+    print(f"  total 802.11 frames seen : {disc.total_frames}")
+    print(f"  total beacons seen       : {disc.beacons_total}")
+    print(f"  beacons without P2P IE   : {disc.beacons_non_p2p}")
+    if disc.ssids_seen_non_p2p:
+        sample = sorted(disc.ssids_seen_non_p2p)[:8]
+        print(f"  sample non-P2P SSIDs     : {sample}"
+              + (f"  (+{len(disc.ssids_seen_non_p2p) - 8} more)"
+                 if len(disc.ssids_seen_non_p2p) > 8 else ""))
     if not devices:
+        if disc.total_frames == 0:
+            print("\ndiagnosis: card captured ZERO frames. check monitor "
+                  "mode and antenna connection; `iw dev <mon> info` should "
+                  "report type=monitor.")
+        elif disc.beacons_total == 0:
+            print("\ndiagnosis: card saw management traffic but no beacons. "
+                  "channels may be wrong or everything nearby is quiet.")
+        elif disc.beacons_non_p2p > 0:
+            print("\ndiagnosis: RF is live (normal Wi-Fi APs seen) but no "
+                  "P2P devices present on the scanned channels. "
+                  "try --all-bands, --channels, --active, or confirm a "
+                  "target is in Wi-Fi Direct mode in RF range.")
         return 0
 
     rows: list[list[str]] = []
@@ -824,7 +858,13 @@ def build_parser() -> argparse.ArgumentParser:
     d = _add("discover")
     d.add_argument("-i", "--iface", required=True)
     d.add_argument("--duration", type=float, default=60.0)
-    d.add_argument("--dwell", type=int, default=500, help="ms per social channel")
+    d.add_argument("--dwell", type=int, default=500, help="ms per channel")
+    d.add_argument("--channels", type=str, default=None,
+                   help="comma-separated custom channel list, e.g. "
+                        "'1,6,11,36,44,149,157'. Overrides --all-bands.")
+    d.add_argument("--all-bands", action="store_true",
+                   help="hop every 2.4 GHz + common 5 GHz channel instead of "
+                        "the three P2P social channels")
     d.add_argument("--detail", action="store_true",
                    help="after the table, print every parsed field per device")
     d.add_argument("--active", action="store_true",
