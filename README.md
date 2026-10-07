@@ -235,6 +235,7 @@ block, adapter picker, and `--active` mode: [docs/sample-run.md](docs/sample-run
 - [docs/cve-coverage.md](docs/cve-coverage.md) which CVEs DIRECTAX ships a targeted reproducer for
 - [docs/testing-roadmap.md](docs/testing-roadmap.md) phased bench-test plan for every module
 - [docs/miracast.md](docs/miracast.md) Miracast (Wi-Fi Display) attack chain
+- [docs/wireless-audit.md](docs/wireless-audit.md) profile-driven, auth-gated RF audit flow (W-spec)
 - [docs/finding-schema.json](docs/finding-schema.json) output schema
 
 ## License

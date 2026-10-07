@@ -1,0 +1,9 @@
+name: Crestron AM-TX3-110
+ssid_pattern: "DIRECT-*"
+target_bssid: auto
+band:
+  - 5GHz
+link_crypto: wpa2_ccmp
+role: client
+radio: BCM4362/SYN4362
+notes: Wi-Fi Direct P2P client, WPA2/CCMP, 5 GHz, SSID pattern DIRECT-*

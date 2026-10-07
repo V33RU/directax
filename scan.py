@@ -41,6 +41,10 @@ Subcommands:
   miracast-join Auto-join a sink P2P group via wpa_cli and resolve its IP
   miracast-uibc UIBC keyboard event injection against a Miracast source
   miracast-uibc-click UIBC mouse/touch pointer injection against a source
+  wireless-audit Profile-driven, auth-gated W-spec flow (W1 discover, W2 pairing, W7 report)
+  w4-linkcrypto KRACK + FragAttacks link-crypto tests against a P2P client
+  w5-availability Single-target deauth resilience test with recovery timing
+  w6-decrypt airdecap-ng session decryption with known PSK
 """
 from __future__ import annotations
 
@@ -85,6 +89,14 @@ from wifidirect_pentest.attacks.miracast_rogue_source import MiracastRogueSource
 from wifidirect_pentest.attacks.miracast_hdcp import MiracastHdcpTest  # noqa: E402
 from wifidirect_pentest.attacks.miracast_join import MiracastJoin  # noqa: E402
 from wifidirect_pentest.scanners.miracast import filter_miracast, is_miracast  # noqa: E402
+from wifidirect_pentest.core.profile import loadProfile  # noqa: E402
+from wifidirect_pentest.core.authz import buildContext, AuthorizationError  # noqa: E402
+from wifidirect_pentest.core.evidence import EvidenceStore  # noqa: E402
+from wifidirect_pentest.scanners.pairing import PairingAnalysis  # noqa: E402
+from wifidirect_pentest.attacks.linkcrypto import LinkCryptoTest  # noqa: E402
+from wifidirect_pentest.attacks.availability import AvailabilityTest  # noqa: E402
+from wifidirect_pentest.attacks.decrypt import SessionDecrypt  # noqa: E402
+from wifidirect_pentest.reporting.wireless_report import writeReports  # noqa: E402
 from wifidirect_pentest.fuzzers import MiracastFuzzer, MiracastSink, P2PFrameFuzzer  # noqa: E402
 from wifidirect_pentest.fuzzers.miracast_wfd_params import WfdParamFuzzer  # noqa: E402
 from wifidirect_pentest.reporting import (NoveltyGate, print_human_summary,  # noqa: E402
@@ -982,6 +994,132 @@ def cmd_miracast_uibc_click(args) -> int:
     return 0 if sent else 1
 
 
+def _w1Discover(mon, profile, args, store, context):
+    from wifidirect_pentest.core.channels import (SOCIAL_CHANNELS,
+                                                  FULL_HOP_2GHZ, FULL_HOP_5GHZ)
+    channels = SOCIAL_CHANNELS
+    if profile.wants5ghz():
+        channels = (FULL_HOP_2GHZ + FULL_HOP_5GHZ if profile.wants24ghz()
+                    else FULL_HOP_5GHZ)
+    disc = Discovery(mon, channels=channels, dwell_ms=500)
+    devices = disc.run(duration=args.duration)
+    matches = []
+    for dev in devices.values():
+        ssidMatch = any(profile.ssidMatches(s) for s in dev.ssids)
+        bssidMatch = (context.targetBssid != "auto"
+                      and context.confinedTo(dev.device_addr))
+        if ssidMatch or bssidMatch:
+            wps = inspect_wps(dev)
+            matches.append((dev, wps))
+    result = {"candidates": len(matches)}
+    if matches:
+        dev, wps = matches[0]
+        rsnCipher = None
+        if dev.wfd:
+            pass
+        result.update({
+            "bssid": next(iter(dev.bssids), dev.device_addr),
+            "device_addr": dev.device_addr,
+            "ssid": sorted(dev.ssids),
+            "role": dev.role,
+            "channels": sorted(dev.channels_seen),
+            "rssi": dev.rssi_best,
+            "wps_config_methods": wps.config_methods_labels,
+            "device_name": wps.device_name,
+            "manufacturer": wps.manufacturer,
+            "model": wps.model_name,
+            "primary_device_type": wps.primary_device_type,
+        })
+        # resolve BSSID into the context for downstream modules
+        if context.targetBssid == "auto" and result.get("bssid"):
+            context.targetBssid = result["bssid"]
+        result["_wps_facts"] = wps
+    store.writeModuleResult("W1-discover",
+                            {k: v for k, v in result.items()
+                             if k != "_wps_facts"})
+    return result
+
+
+def cmd_wireless_audit(args) -> int:
+    _require_root()
+    profile = loadProfile(args.profile)
+    runDir = args.out or os.path.join("run",
+                                      time.strftime("%Y%m%d-%H%M%S"))
+    context = buildContext(args.operator, args.authorize, profile,
+                           args.target_bssid, args.authorize_active, runDir)
+    store = EvidenceStore(runDir)
+    requested = [m.strip().upper() for m in args.modules.split(",") if m.strip()]
+    print(f"[wireless-audit] run dir: {runDir}")
+    print(f"[wireless-audit] target: {profile.name} "
+          f"ssid~{profile.ssidPattern} bssid={context.targetBssid} "
+          f"active={context.activeOptin}")
+
+    ifc, mon = _open_monitor(args.iface)
+    w1Result = None
+    try:
+        if "W1" in requested:
+            w1Result = _w1Discover(mon, profile, args, store, context)
+            print(f"[W1] candidates={w1Result.get('candidates')} "
+                  f"bssid={w1Result.get('bssid')}")
+
+        if "W2" in requested:
+            wpsFacts = (w1Result or {}).get("_wps_facts")
+            pairing = PairingAnalysis(mon, context.targetBssid)
+            w2 = pairing.run(wpsFacts, activeProbe=context.activeOptin)
+            store.writeModuleResult("W2-pairing", w2)
+            print(f"[W2] config_method={w2.get('config_method')} "
+                  f"unpaired={w2.get('unpaired_peer_behavior')}")
+    finally:
+        ifc.restore()
+
+    try:
+        jsonPath, mdPath = writeReports(store)
+        print(f"[W7] report: {mdPath}")
+    except Exception as exc:
+        print(f"[W7] report generation failed: {exc}", file=sys.stderr)
+    return 0
+
+
+def cmd_w4_linkcrypto(args) -> int:
+    _require_root()
+    if not args.authorized:
+        raise SystemExit("--authorized required (stands up a rogue AP, injects)")
+    test = LinkCryptoTest(args.iface, args.target, args.channel, args.ssid,
+                          krackPath=args.krack_path,
+                          fragattacksPath=args.fragattacks_path,
+                          evidenceDir=args.evidence_dir)
+    result = test.run()
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def cmd_w5_availability(args) -> int:
+    _require_root()
+    profile = loadProfile(args.profile)
+    runDir = args.out or os.path.join("run", time.strftime("%Y%m%d-%H%M%S"))
+    context = buildContext(args.operator, args.authorize, profile,
+                           args.target_bssid, args.authorize_active, runDir)
+    ifc, mon = _open_monitor(args.iface)
+    try:
+        test = AvailabilityTest(mon, args.target_bssid, args.client, context,
+                                durationS=args.duration)
+        result = test.run()
+    finally:
+        ifc.restore()
+    store = EvidenceStore(runDir)
+    store.writeModuleResult("W5-availability", result)
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("target_only") else 1
+
+
+def cmd_w6_decrypt(args) -> int:
+    dec = SessionDecrypt(args.pcap, args.ssid, args.psk,
+                         evidenceDir=args.evidence_dir)
+    result = dec.run()
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("decrypted") else 1
+
+
 def cmd_novelty_check(args) -> int:
     findings = load_findings(args.input)
     findings = NoveltyGate().apply(findings)
@@ -1380,6 +1518,53 @@ def build_parser() -> argparse.ArgumentParser:
     ms_click.add_argument("--authorized", action="store_true")
     ms_click.set_defaults(func=cmd_miracast_uibc_click)
 
+    # W-spec wireless audit flow (profile-driven, auth-gated)
+    wa = _add("wireless-audit")
+    wa.add_argument("-i", "--iface", required=True,
+                    help="monitor-mode interface")
+    wa.add_argument("--profile", required=True, help="target profile YAML")
+    wa.add_argument("--operator", required=True, help="operator identity")
+    wa.add_argument("--authorize", required=True, help="authorization token")
+    wa.add_argument("--target-bssid", default=None,
+                    help="explicit target BSSID (overrides profile)")
+    wa.add_argument("--authorize-active", action="store_true",
+                    help="second opt-in enabling active/disruptive modules")
+    wa.add_argument("--out", default=None, help="run directory")
+    wa.add_argument("--duration", type=float, default=45.0,
+                    help="W1 discovery duration")
+    wa.add_argument("--modules", default="W1,W2",
+                    help="comma list of modules to run (W1..W7)")
+    wa.set_defaults(func=cmd_wireless_audit)
+
+    w4 = _add("w4-linkcrypto")
+    w4.add_argument("-i", "--iface", required=True,
+                    help="rogue-AP interface (hostapd test build)")
+    w4.add_argument("--target", required=True, help="client MAC")
+    w4.add_argument("--channel", type=int, required=True)
+    w4.add_argument("--ssid", required=True)
+    w4.add_argument("--krack-path", default="krack-test-client.py")
+    w4.add_argument("--fragattacks-path", default="fragattack.py")
+    w4.add_argument("--authorized", action="store_true")
+    w4.set_defaults(func=cmd_w4_linkcrypto)
+
+    w5 = _add("w5-availability")
+    w5.add_argument("-i", "--iface", required=True)
+    w5.add_argument("--profile", required=True)
+    w5.add_argument("--operator", required=True)
+    w5.add_argument("--authorize", required=True)
+    w5.add_argument("--target-bssid", required=True)
+    w5.add_argument("--client", required=True, help="single client MAC")
+    w5.add_argument("--duration", type=float, default=5.0)
+    w5.add_argument("--authorize-active", action="store_true")
+    w5.add_argument("--out", default=None)
+    w5.set_defaults(func=cmd_w5_availability)
+
+    w6 = _add("w6-decrypt")
+    w6.add_argument("--pcap", required=True)
+    w6.add_argument("--ssid", required=True)
+    w6.add_argument("--psk", required=True)
+    w6.set_defaults(func=cmd_w6_decrypt)
+
     return p
 
 
@@ -1393,7 +1578,8 @@ def main() -> int:
         "driver-probe", "karma", "p2p-fuzz",
         "cve-2014-0997", "cve-2019-17666",
         "cve-2021-0326", "cve-2021-27803",
-        "miracast-scan", "miracast-join",
+        "miracast-scan", "miracast-join", "wireless-audit",
+        "w4-linkcrypto", "w5-availability",
     }
     wants_pick = ("--pick-adapter" in sys.argv)
     asking_help = any(a in ("-h", "--help") for a in sys.argv)

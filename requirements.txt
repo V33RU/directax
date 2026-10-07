@@ -1,3 +1,4 @@
 scapy>=2.5.0
 cryptography>=41.0.0
+pyyaml>=6.0
 pytest>=7.4.0
