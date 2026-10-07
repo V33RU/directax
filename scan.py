@@ -61,7 +61,7 @@ from wifidirect_pentest.banner import print_banner  # noqa: E402
 from wifidirect_pentest.core import Interface, get_logger  # noqa: E402
 from wifidirect_pentest.core.interface import (InterfaceError, preflight,  # noqa: E402
                                                unblock_rfkill)
-from wifidirect_pentest.core.finding import (Confidence, Confirmation,  # noqa: E402
+from wifidirect_pentest.core.finding import (Confidence,  # noqa: E402
                                              Finding, Location, load_findings)
 from wifidirect_pentest.core import finding_builders as fb  # noqa: E402
 from wifidirect_pentest.scanners import Discovery, inspect_wps  # noqa: E402
@@ -88,9 +88,9 @@ from wifidirect_pentest.attacks.miracast_session import MiracastSession  # noqa:
 from wifidirect_pentest.attacks.miracast_rogue_source import MiracastRogueSource  # noqa: E402
 from wifidirect_pentest.attacks.miracast_hdcp import MiracastHdcpTest  # noqa: E402
 from wifidirect_pentest.attacks.miracast_join import MiracastJoin  # noqa: E402
-from wifidirect_pentest.scanners.miracast import filter_miracast, is_miracast  # noqa: E402
+from wifidirect_pentest.scanners.miracast import filter_miracast  # noqa: E402
 from wifidirect_pentest.core.profile import loadProfile  # noqa: E402
-from wifidirect_pentest.core.authz import buildContext, AuthorizationError  # noqa: E402
+from wifidirect_pentest.core.authz import buildContext  # noqa: E402
 from wifidirect_pentest.core.evidence import EvidenceStore  # noqa: E402
 from wifidirect_pentest.scanners.pairing import PairingAnalysis  # noqa: E402
 from wifidirect_pentest.attacks.linkcrypto import LinkCryptoTest  # noqa: E402
